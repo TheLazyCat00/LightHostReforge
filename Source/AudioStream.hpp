@@ -19,8 +19,10 @@ using namespace juce;
 //==============================================================================
 /**
     An AudioProcessorPlayer that applies a gain ramp (fade-in / fade-out)
-    over the output buffers and forwards enabled MIDI inputs into hosted
-    plug-ins.
+    over the output buffers and forwards enabled MIDI inputs into the graph.
+
+    PluginChain owns the actual MIDI connections between graph nodes so MIDI
+    follows the same user-visible plug-in order as the chain.
 
     Call fadeTo(target, rampMs) to start a linear ramp from the current gain
     to the target over the specified duration.  The ramp is sample-accurate
@@ -67,8 +69,9 @@ public:
 
     //==============================================================================
     /**
-        Attach a processor and, when it is an AudioProcessorGraph, keep a MIDI
-        input node connected to every hosted processor that accepts MIDI.
+        Attach a processor and, when it is an AudioProcessorGraph, keep the
+        graph's MIDI input node available.  PluginChain is responsible for
+        connecting that node through hosted plug-ins in chain order.
 
         AudioProcessorPlayer::setProcessor is not virtual, so this intentionally
         hides it for AudioStream call sites.
@@ -84,7 +87,7 @@ public:
         if (currentGraph != nullptr)
         {
             currentGraph->addChangeListener (this);
-            refreshMidiRouting();
+            ensureMidiInputNode();
         }
     }
 
@@ -218,10 +221,10 @@ private:
     void changeListenerCallback (ChangeBroadcaster* source) override
     {
         if (source == currentGraph)
-            refreshMidiRouting();
+            ensureMidiInputNode();
     }
 
-    void refreshMidiRouting()
+    void ensureMidiInputNode()
     {
         if (currentGraph == nullptr || updatingMidiRouting)
             return;
@@ -235,29 +238,6 @@ private:
                 std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
                     AudioProcessorGraph::AudioGraphIOProcessor::midiInputNode),
                 midiInputId);
-        }
-
-        if (currentGraph->getNodeForId (midiInputId) == nullptr)
-            return;
-
-        for (const auto& node : currentGraph->getNodes())
-        {
-            if (node == nullptr || node->nodeID == midiInputId)
-                continue;
-
-            auto* processor = node->getProcessor();
-            if (processor == nullptr
-                || dynamic_cast<AudioProcessorGraph::AudioGraphIOProcessor*> (processor) != nullptr
-                || !processor->acceptsMidi())
-                continue;
-
-            const AudioProcessorGraph::Connection connection {
-                { midiInputId, AudioProcessorGraph::midiChannelIndex },
-                { node->nodeID, AudioProcessorGraph::midiChannelIndex }
-            };
-
-            if (!currentGraph->isConnected (connection) && currentGraph->canConnect (connection))
-                currentGraph->addConnection (connection);
         }
     }
 
