@@ -67,7 +67,7 @@ private:
     PopupMenu menu;
     bool menuIconLeftClicked;
     AudioProcessorGraph graph;
-    AudioStream player;
+    AudioStream player{ deviceManager };
     #if JUCE_WINDOWS
     int x, y;
     #endif

@@ -2,7 +2,7 @@
 //  AudioStream.hpp
 //  Light Host
 //
-//  Audio processor player with gain-ramp (fade) support.
+//  Audio processor player with gain-ramp (fade) and MIDI input support.
 //  Extracted from IconMenu as a reusable audio infrastructure class.
 //
 
@@ -10,6 +10,7 @@
 #define AudioStream_hpp
 
 #include <juce_audio_devices/juce_audio_devices.h>
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <atomic>
 
@@ -18,7 +19,10 @@ using namespace juce;
 //==============================================================================
 /**
     An AudioProcessorPlayer that applies a gain ramp (fade-in / fade-out)
-    over the output buffers.
+    over the output buffers and forwards enabled MIDI inputs into the graph.
+
+    PluginChain owns the actual MIDI connections between graph nodes so MIDI
+    follows the same user-visible plug-in order as the chain.
 
     Call fadeTo(target, rampMs) to start a linear ramp from the current gain
     to the target over the specified duration.  The ramp is sample-accurate
@@ -26,17 +30,33 @@ using namespace juce;
 
     Use setGainImmediately(gain) to snap the gain without a ramp.
 */
-class AudioStream  : public AudioProcessorPlayer
+class AudioStream  : public AudioProcessorPlayer,
+                     private ChangeListener
 {
 public:
-    AudioStream()  : AudioProcessorPlayer (false) {}
+    explicit AudioStream (AudioDeviceManager& dm)
+        : AudioProcessorPlayer (false), midiDeviceManager (dm)
+    {
+        // Listen to every MIDI input enabled in AudioDeviceManager.  Passing an
+        // empty device identifier means newly enabled devices start forwarding
+        // immediately without needing to re-register the callback.
+        midiDeviceManager.addMidiInputDeviceCallback ({}, this);
+    }
+
+    ~AudioStream() override
+    {
+        if (currentGraph != nullptr)
+            currentGraph->removeChangeListener (this);
+
+        midiDeviceManager.removeMidiInputDeviceCallback ({}, this);
+    }
 
     static constexpr int fadeRampMs   = 5;
     static constexpr int fadeExtraMs  = 5;
 
     /** When true, gain transitions use a linear ramp (fadeIn/fadeOut).
         When false, gain changes are instant (snap).  The ramp duration
-        is always the fadeRmpMs / fadeExtraMs compile-time constants —
+        is always the fadeRampMs / fadeExtraMs compile-time constants —
         unchecking simply skips the ramp, re-checking restores it. */
     std::atomic<bool> fadeEnabled{ true };
 
@@ -46,6 +66,30 @@ public:
 
     /** Called when the audio device has been stopped. */
     std::function<void()> onDeviceStopped;
+
+    //==============================================================================
+    /**
+        Attach a processor and, when it is an AudioProcessorGraph, keep the
+        graph's MIDI input node available.  PluginChain is responsible for
+        connecting that node through hosted plug-ins in chain order.
+
+        AudioProcessorPlayer::setProcessor is not virtual, so this intentionally
+        hides it for AudioStream call sites.
+    */
+    void setProcessor (AudioProcessor* processor)
+    {
+        if (currentGraph != nullptr)
+            currentGraph->removeChangeListener (this);
+
+        AudioProcessorPlayer::setProcessor (processor);
+        currentGraph = dynamic_cast<AudioProcessorGraph*> (processor);
+
+        if (currentGraph != nullptr)
+        {
+            currentGraph->addChangeListener (this);
+            ensureMidiInputNode();
+        }
+    }
 
     //==============================================================================
     void audioDeviceIOCallbackWithContext (const float* const* inputChannelData,
@@ -174,6 +218,33 @@ public:
 
 private:
     //==============================================================================
+    void changeListenerCallback (ChangeBroadcaster* source) override
+    {
+        if (source == currentGraph)
+            ensureMidiInputNode();
+    }
+
+    void ensureMidiInputNode()
+    {
+        if (currentGraph == nullptr || updatingMidiRouting)
+            return;
+
+        const ScopedValueSetter<bool> routingGuard (updatingMidiRouting, true);
+        const AudioProcessorGraph::NodeID midiInputId (1000002);
+
+        if (currentGraph->getNodeForId (midiInputId) == nullptr)
+        {
+            currentGraph->addNode (
+                std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
+                    AudioProcessorGraph::AudioGraphIOProcessor::midiInputNode),
+                midiInputId);
+        }
+    }
+
+    AudioDeviceManager& midiDeviceManager;
+    AudioProcessorGraph* currentGraph = nullptr;
+    bool updatingMidiRouting = false;
+
     std::atomic<double> sampleRate{ 44100.0 };
     std::atomic<float> curGain{ 1.0f };
     std::atomic<float> startGain{ 1.0f };

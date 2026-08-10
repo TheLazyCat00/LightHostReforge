@@ -267,10 +267,23 @@ void PluginChain::connectChain()
 {
     const AudioProcessorGraph::NodeID INPUT (1000000);
     const AudioProcessorGraph::NodeID OUTPUT (INPUT.uid + 1);
+    const AudioProcessorGraph::NodeID MIDI_INPUT (INPUT.uid + 2);
     const int CHANNEL_ONE = 0;
     const int CHANNEL_TWO = 1;
 
-    // Remove all existing connections
+    // The audio player injects hardware MIDI into the graph's MIDI input node.
+    // Keep the node stable and let this class own all MIDI connections so they
+    // follow the exact user-visible plug-in order.
+    if (graph.getNodeForId (MIDI_INPUT) == nullptr)
+    {
+        graph.addNode (
+            std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor> (
+                AudioProcessorGraph::AudioGraphIOProcessor::midiInputNode),
+            MIDI_INPUT);
+    }
+
+    // Remove all existing audio and MIDI connections before rebuilding both
+    // paths from the ordered chain.
     auto connections = graph.getConnections();
     for (auto& c : connections)
         graph.removeConnection (c);
@@ -281,51 +294,80 @@ void PluginChain::connectChain()
         graph.addConnection ({ {src, sc}, {dst, dc} });
     };
 
-    if (chain.empty())
+    auto midiConn = [&](AudioProcessorGraph::NodeID src,
+                         AudioProcessorGraph::NodeID dst)
     {
-        conn (INPUT, CHANNEL_ONE, OUTPUT, CHANNEL_ONE);
-        conn (INPUT, CHANNEL_TWO, OUTPUT, CHANNEL_TWO);
-        return;
-    }
+        const AudioProcessorGraph::Connection connection {
+            { src, AudioProcessorGraph::midiChannelIndex },
+            { dst, AudioProcessorGraph::midiChannelIndex }
+        };
 
-    AudioProcessorGraph::NodeID lastId;
-    bool hasInputConnected = false;
+        if (graph.canConnect (connection))
+            graph.addConnection (connection);
+    };
+
+    AudioProcessorGraph::NodeID lastAudioId;
+    bool hasAudioInputConnected = false;
+
+    // MIDI starts at the hardware-input node.  A processor that accepts MIDI
+    // receives the current stream.  Only processors that actually produce MIDI
+    // become the source for subsequent plug-ins; synths such as Serum normally
+    // consume MIDI without producing it, so they do not cut the stream off.
+    AudioProcessorGraph::NodeID currentMidiSource = MIDI_INPUT;
+    bool hasMidiSource = graph.getNodeForId (MIDI_INPUT) != nullptr;
 
     for (int i = 0; i < (int) chain.size(); i++)
     {
         const auto& slot = chain[(size_t) i];
 
-        // Failed or bypassed plugins are skipped in the audio path
+        // Failed or bypassed plugins are skipped in both paths.
         if (slot.isFailed() || slot.bypassed || slot.node == nullptr)
             continue;
 
         auto nodeId = slot.node->nodeID;
+        auto* processor = slot.node->getProcessor();
 
-        if (!hasInputConnected)
+        // Audio remains serial exactly as before.
+        if (!hasAudioInputConnected)
         {
             conn (INPUT, CHANNEL_ONE, nodeId, CHANNEL_ONE);
             conn (INPUT, CHANNEL_TWO, nodeId, CHANNEL_TWO);
-            hasInputConnected = true;
+            hasAudioInputConnected = true;
         }
         else
         {
-            conn (lastId, CHANNEL_ONE, nodeId, CHANNEL_ONE);
-            conn (lastId, CHANNEL_TWO, nodeId, CHANNEL_TWO);
+            conn (lastAudioId, CHANNEL_ONE, nodeId, CHANNEL_ONE);
+            conn (lastAudioId, CHANNEL_TWO, nodeId, CHANNEL_TWO);
         }
 
-        lastId = nodeId;
+        lastAudioId = nodeId;
+
+        // MIDI is also ordered by the chain.  MIDI processors therefore modify
+        // the stream seen by later processors/instruments instead of every node
+        // receiving the original keyboard events in parallel.
+        if (processor != nullptr)
+        {
+            if (hasMidiSource && processor->acceptsMidi())
+                midiConn (currentMidiSource, nodeId);
+
+            if (processor->producesMidi())
+            {
+                currentMidiSource = nodeId;
+                hasMidiSource = true;
+            }
+        }
     }
 
-    if (!hasInputConnected)
+    if (!hasAudioInputConnected)
     {
         // All plugins are bypassed/failed — pass audio straight through
         conn (INPUT, CHANNEL_ONE, OUTPUT, CHANNEL_ONE);
         conn (INPUT, CHANNEL_TWO, OUTPUT, CHANNEL_TWO);
     }
-    else if (lastId.uid != 0)
+    else if (lastAudioId.uid != 0)
     {
-        conn (lastId, CHANNEL_ONE, OUTPUT, CHANNEL_ONE);
-        conn (lastId, CHANNEL_TWO, OUTPUT, CHANNEL_TWO);
+        conn (lastAudioId, CHANNEL_ONE, OUTPUT, CHANNEL_ONE);
+        conn (lastAudioId, CHANNEL_TWO, OUTPUT, CHANNEL_TWO);
     }
 }
 
@@ -388,7 +430,6 @@ std::unique_ptr<XmlElement> PluginChain::createPresetXml() const
         if (slot.errorMessage.isNotEmpty())
             pluginXml->setAttribute ("error", slot.errorMessage);
 
-        // Full PluginDescription via its built-in XML serialization
         if (auto descXml = slot.desc.createXml())
             pluginXml->addChildElement (descXml.release());
 
@@ -424,14 +465,12 @@ void PluginChain::loadFromPresetXml (const XmlElement* xml)
         slot.bypassed     = pluginXml->getBoolAttribute ("bypassed", false);
         slot.errorMessage = pluginXml->getStringAttribute ("error", "");
 
-        // Restore PluginDescription from child description element
         if (auto* descXml = pluginXml->getFirstChildElement())
         {
             if (descXml->hasTagName ("PLUGIN"))
                 slot.desc.loadFromXml (*descXml);
         }
 
-        // Fallback: try old format attributes (name/format/version)
         if (slot.desc.name.isEmpty() && pluginXml->hasAttribute ("name"))
         {
             slot.desc.name             = pluginXml->getStringAttribute ("name");
@@ -441,12 +480,11 @@ void PluginChain::loadFromPresetXml (const XmlElement* xml)
             slot.desc.uniqueId         = (int) pluginXml->getIntAttribute ("uid", slot.desc.uniqueId);
         }
 
-        // Restore state
         if (auto* stateXml = pluginXml->getChildByName ("state"))
         {
             String stateBase64 = stateXml->getAllSubText().trim();
             if (stateBase64.isNotEmpty())
-                slot.state.fromBase64Encoding (stateBase64);
+                slot.state.fromBase64Encoding(stateBase64);
         }
 
         chain.push_back (std::move (slot));

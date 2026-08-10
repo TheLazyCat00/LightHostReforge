@@ -58,6 +58,24 @@ else()
     message(STATUS "JUCE_VST3_FORMAT_SRC not found — skipping WaveShell VST3 patch")
 endif()
 
+# JUCE 8 exposes Desktop::isDarkModeActive() as an instance method.  Reforge's
+# older macOS code still calls it statically; patch that one call at configure
+# time so the same source remains compatible with the JUCE 8 package used by
+# vcpkg.  This is idempotent and only touches the source when the old spelling
+# is present.
+if(APPLE)
+    set(_ICON_MENU_SRC "${CMAKE_CURRENT_SOURCE_DIR}/Source/IconMenu.cpp")
+    file(READ "${_ICON_MENU_SRC}" _ICON_MENU_CONTENT)
+    string(REPLACE
+        "Desktop::isDarkModeActive()"
+        "Desktop::getInstance().isDarkModeActive()"
+        _ICON_MENU_PATCHED "${_ICON_MENU_CONTENT}")
+    if(NOT _ICON_MENU_CONTENT STREQUAL _ICON_MENU_PATCHED)
+        message(STATUS "Updating macOS dark-mode call for JUCE 8")
+        file(WRITE "${_ICON_MENU_SRC}" "${_ICON_MENU_PATCHED}")
+    endif()
+endif()
+
 #==============================================================================
 # Application target
 #==============================================================================
@@ -66,6 +84,7 @@ juce_add_gui_app(LightHost
     COMPANY_NAME "Rolando Islas"
     COMPANY_WEBSITE "https://www.rolandoislas.com"
     COMPANY_EMAIL "admin@rolandoislas.com"
+    BUNDLE_ID "com.rolandoislas.LightHost"
     VERSION "1.2.0"
     ICON_BIG "Resources/icon.png"
     ICON_SMALL "Resources/icon.png"
@@ -77,7 +96,6 @@ juce_add_gui_app(LightHost
 target_compile_definitions(LightHost PRIVATE
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_VST=0
-    JUCE_ASIO=1
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=0
     JUCE_MODAL_LOOPS_PERMITTED=1
@@ -85,15 +103,22 @@ target_compile_definitions(LightHost PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LightHost,JUCE_VERSION>"
 )
 
-# ASIO SDK — locate iasiodrv.h for JUCE_ASIO=1
-find_path(ASIOSDK_INCLUDE_DIR iasiodrv.h PATH_SUFFIXES asiosdk/common)
-if(ASIOSDK_INCLUDE_DIR)
-    target_include_directories(LightHost PRIVATE ${ASIOSDK_INCLUDE_DIR})
-    message(STATUS "ASIO SDK found: ${ASIOSDK_INCLUDE_DIR}")
+# ASIO is Windows-only. Keeping this conditional is required for macOS builds,
+# where the ASIO SDK is unavailable and CoreAudio is used instead.
+if(WIN32)
+    target_compile_definitions(LightHost PRIVATE JUCE_ASIO=1)
+
+    find_path(ASIOSDK_INCLUDE_DIR iasiodrv.h PATH_SUFFIXES asiosdk/common)
+    if(ASIOSDK_INCLUDE_DIR)
+        target_include_directories(LightHost PRIVATE ${ASIOSDK_INCLUDE_DIR})
+        message(STATUS "ASIO SDK found: ${ASIOSDK_INCLUDE_DIR}")
+    else()
+        message(FATAL_ERROR "ASIO SDK not found. "
+            "Install via: vcpkg install asiosdk  "
+            "Or set CMAKE_PREFIX_PATH to the SDK location")
+    endif()
 else()
-    message(FATAL_ERROR "ASIO SDK not found. "
-        "Install via: vcpkg install asiosdk  "
-        "Or set CMAKE_PREFIX_PATH to the SDK location")
+    target_compile_definitions(LightHost PRIVATE JUCE_ASIO=0)
 endif()
 
 # Audio Unit hosting — macOS only

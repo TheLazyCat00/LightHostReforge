@@ -23,7 +23,7 @@ AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
     // controls are visible by default (our custom controls sit below them).
     selector = std::make_unique<AudioDeviceSelectorComponent> (dm,
                         0, 256, 0, 256,
-                        false,    // showMidiInputOptions
+                        true,     // showMidiInputOptions
                         false,    // showMidiOutputSelector
                         true,     // showChannelsAsStereoPairs
                         false);   // hideAdvancedOptionsWithButton
@@ -33,7 +33,7 @@ AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
     // audioDeviceSettingsComp->setBounds(...).  JUCE's setBounds
     // sets the panel's dimensions *before* calling its resized(),
     // so the panel's children are laid out at the correct width.
-    selector->setSize (512, 420);
+    selector->setSize (512, 500);
     addAndMakeVisible (selector.get());
 
     // --- Custom controls --------------------------------------------------
@@ -64,9 +64,8 @@ AudioSettingsComponent::AudioSettingsComponent (AudioDeviceManager& dm,
         perTypeState[lastDeviceType] = std::make_unique<XmlElement> (*state);
 
     // Set size LAST — triggers resized() which accesses all children.
-    // 650 px high to accommodate the fully-expanded selector plus our
-    // extra controls.
-    setSize (520, 480);
+    // Extra height leaves room for JUCE's MIDI input device list.
+    setSize (520, 560);
 }
 
 AudioSettingsComponent::~AudioSettingsComponent()
