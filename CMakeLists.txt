@@ -77,7 +77,6 @@ juce_add_gui_app(LightHost
 target_compile_definitions(LightHost PRIVATE
     JUCE_PLUGINHOST_VST3=1
     JUCE_PLUGINHOST_VST=0
-    JUCE_ASIO=1
     JUCE_USE_CURL=0
     JUCE_WEB_BROWSER=0
     JUCE_MODAL_LOOPS_PERMITTED=1
@@ -85,15 +84,22 @@ target_compile_definitions(LightHost PRIVATE
     JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LightHost,JUCE_VERSION>"
 )
 
-# ASIO SDK — locate iasiodrv.h for JUCE_ASIO=1
-find_path(ASIOSDK_INCLUDE_DIR iasiodrv.h PATH_SUFFIXES asiosdk/common)
-if(ASIOSDK_INCLUDE_DIR)
-    target_include_directories(LightHost PRIVATE ${ASIOSDK_INCLUDE_DIR})
-    message(STATUS "ASIO SDK found: ${ASIOSDK_INCLUDE_DIR}")
+# ASIO is Windows-only. Keeping this conditional is required for macOS builds,
+# where the ASIO SDK is unavailable and CoreAudio is used instead.
+if(WIN32)
+    target_compile_definitions(LightHost PRIVATE JUCE_ASIO=1)
+
+    find_path(ASIOSDK_INCLUDE_DIR iasiodrv.h PATH_SUFFIXES asiosdk/common)
+    if(ASIOSDK_INCLUDE_DIR)
+        target_include_directories(LightHost PRIVATE ${ASIOSDK_INCLUDE_DIR})
+        message(STATUS "ASIO SDK found: ${ASIOSDK_INCLUDE_DIR}")
+    else()
+        message(FATAL_ERROR "ASIO SDK not found. "
+            "Install via: vcpkg install asiosdk  "
+            "Or set CMAKE_PREFIX_PATH to the SDK location")
+    endif()
 else()
-    message(FATAL_ERROR "ASIO SDK not found. "
-        "Install via: vcpkg install asiosdk  "
-        "Or set CMAKE_PREFIX_PATH to the SDK location")
+    target_compile_definitions(LightHost PRIVATE JUCE_ASIO=0)
 endif()
 
 # Audio Unit hosting — macOS only
