@@ -19,29 +19,6 @@
 
 using namespace juce;
 
-#if ! JUCE_WINDOWS
-/**
-    Placeholder for the Windows-only loopback device type.
-
-    The main host registers this type unconditionally.  On non-Windows
-    platforms it advertises no devices, which keeps the shared host code
-    portable without exposing a non-functional loopback device.
-*/
-class LoopbackAudioIODeviceType : public AudioIODeviceType
-{
-public:
-    LoopbackAudioIODeviceType() : AudioIODeviceType ("Loopback") {}
-    ~LoopbackAudioIODeviceType() override = default;
-
-    void scanForDevices() override {}
-    StringArray getDeviceNames (bool) const override { return {}; }
-    int getDefaultDeviceIndex (bool) const override { return -1; }
-    int getIndexOfDevice (AudioIODevice*, bool) const override { return -1; }
-    bool hasSeparateInputsAndOutputs() const override { return false; }
-    AudioIODevice* createDevice (const String&, const String&) override { return nullptr; }
-};
-#endif
-
 class PluginChain;
 
 // Emoji UTF-8 byte sequences for plugin status indicators
