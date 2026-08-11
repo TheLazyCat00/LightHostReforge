@@ -21,30 +21,6 @@
 #include "Windows.h"
 #endif
 
-//==============================================================================
-/** Remove plugins with fewer than 2 input or output channels from the list.
-    Called when the plugin-selection window closes to keep the list clean.
-*/
-static void removePluginsLackingInputOutput (KnownPluginList& knownPluginList)
-{
-    // Reverse iteration: removing the current element only shifts already-
-    // processed tail entries, so the index adjustment is trivially correct.
-    // A copy of the PluginDescription is passed to removeType rather than a
-    // reference into the list's internal array, because the removal operation
-    // shifts array elements which would invalidate any interior reference.
-    for (int i = knownPluginList.getNumTypes(); --i >= 0;)
-    {
-        if (auto* plugin = knownPluginList.getType (i))
-        {
-            if (plugin->numInputChannels < 2 || plugin->numOutputChannels < 2)
-            {
-                auto desc = *plugin;
-                knownPluginList.removeType (desc);
-            }
-        }
-    }
-}
-
 class IconMenu::PluginListWindow : public DocumentWindow
 {
 public:
@@ -81,14 +57,14 @@ public:
 
     void closeButtonPressed() override
     {
-        removePluginsLackingInputOutput (owner.knownPluginList);
         // Defer destruction to avoid use-after-free: the DocumentWindow base
         // class continues to access `this` after closeButtonPressed() returns,
         // so synchronously setting the unique_ptr to nullptr would destroy the
         // object while it is still in use.
-        auto* ownerPtr = &owner;
-        MessageManager::callAsync ([ownerPtr]() {
-            ownerPtr->pluginListWindow = nullptr;
+        auto safeOwner = Component::SafePointer<IconMenu>(&owner);
+        MessageManager::callAsync ([safeOwner]() {
+            if (auto* ownerPtr = safeOwner.getComponent())
+                ownerPtr->pluginListWindow = nullptr;
         });
     }
 
@@ -440,7 +416,7 @@ private:
         {
             if (auto* desc = owner.knownPluginList.getType(i))
             {
-                if (!File(desc->fileOrIdentifier).exists())
+                if (!pluginFormatManager.doesPluginStillExist(*desc))
                     owner.knownPluginList.removeType(*desc);
             }
         }
@@ -493,10 +469,12 @@ private:
     void addPluginToChain(const PluginDescription& desc)
     {
         owner.pluginChain->add(desc);
+        owner.markPresetDirty();
 
-        auto* ownerPtr = &owner;
-        MessageManager::callAsync([ownerPtr]() {
-            ownerPtr->pluginListWindow = nullptr;
+        auto safeOwner = Component::SafePointer<IconMenu>(&owner);
+        MessageManager::callAsync([safeOwner]() {
+            if (auto* ownerPtr = safeOwner.getComponent())
+                ownerPtr->pluginListWindow = nullptr;
         });
     }
 };
@@ -568,14 +546,26 @@ INDEX_PRESET_LOAD_FILE(7000000)
     deviceManager.addAudioCallback(&player);
 
     // Register audio device error/stopped callbacks for automatic recovery
-    // after sleep/wake or device disconnection.
-    player.onDeviceError = [this](const String& msg) {
-        lastDeviceError = msg;
-        triggerAudioDeviceRecovery();
+    // after sleep/wake or device disconnection.  Device callbacks may arrive
+    // off the message thread, so marshal recovery work to the message thread.
+    auto safeThis = Component::SafePointer<IconMenu>(this);
+    player.onDeviceError = [safeThis](const String& msg) {
+        MessageManager::callAsync([safeThis, msg]() {
+            if (auto* self = safeThis.getComponent())
+            {
+                self->lastDeviceError = msg;
+                self->triggerAudioDeviceRecovery();
+            }
+        });
     };
-    player.onDeviceStopped = [this]() {
-        if (deviceManager.getCurrentAudioDevice() == nullptr)
-            triggerAudioDeviceRecovery();
+    player.onDeviceStopped = [safeThis]() {
+        MessageManager::callAsync([safeThis]() {
+            if (auto* self = safeThis.getComponent())
+            {
+                if (self->deviceManager.getCurrentAudioDevice() == nullptr)
+                    self->triggerAudioDeviceRecovery();
+            }
+        });
     };
     // Plugins - all
     auto savedPluginList = getAppProperties().getUserSettings()->getXmlValue("pluginList");
@@ -669,7 +659,7 @@ void IconMenu::setIcon()
 {
     // Load icons via ImageCache (avoids decoding PNG on every menu open)
 #if JUCE_MAC
-    if (Desktop::isDarkModeActive())
+    if (Desktop::getInstance().isDarkModeActive())
     {
         auto img = ImageCache::getFromMemory(BinaryData::menu_icon_white_png, BinaryData::menu_icon_white_pngSize);
         setIconImage(img, img);
@@ -875,6 +865,7 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
             PluginWindow::closeAllCurrentlyOpenWindows();
             im->pluginChain->loadAll();
             im->player.resume(im->deviceManager, im->graph);
+            im->markPresetDirty();
             return;
         }
         if (id == 3)
@@ -977,9 +968,7 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
         else if (id >= im->INDEX_BYPASS && id < im->INDEX_BYPASS + 1000000)
         {
             int index = id - im->INDEX_BYPASS;
-
-            im->pluginChain->toggleBypass(index);
-            PluginWindow::updateAllTitlesAndToolbars(im);
+            im->togglePluginBypass(index);
         }
         // Show / close active plugin GUI (toggle)
         else if (id >= im->INDEX_EDIT && id < im->INDEX_EDIT + 1000000)
@@ -1032,6 +1021,8 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
 void IconMenu::togglePluginBypass(int timeSortedIndex)
 {
     pluginChain->toggleBypass(timeSortedIndex);
+    if (presetManager != nullptr)
+        presetManager->markDirty();
     PluginWindow::updateAllTitlesAndToolbars(this);
 }
 
@@ -1089,12 +1080,13 @@ void IconMenu::saveCurrentPreset()
 
 void IconMenu::triggerAudioDeviceRecovery()
 {
-    // Debounce: don't retry more than once every 3 seconds, max 5 attempts.
+    // Debounce retries and stop after the configured maximum attempt count.
     if (deviceRecentlyRecovered || deviceRecoveryRetryCount >= maxDeviceRecoveryRetries)
         return;
 
     deviceRecentlyRecovered = true;
     ++deviceRecoveryRetryCount;
+    bool recovered = false;
 
     // Suspend audio callbacks
     deviceManager.removeAudioCallback (&player);
@@ -1112,6 +1104,8 @@ void IconMenu::triggerAudioDeviceRecovery()
             player.setProcessor (&graph);
             deviceManager.addAudioCallback (&player);
             deviceRecoveryRetryCount = 0;
+            lastDeviceError.clear();
+            recovered = true;
 
             // Persist recovered state to global
             if (auto stableState = deviceManager.createStateXml())
@@ -1137,13 +1131,27 @@ void IconMenu::triggerAudioDeviceRecovery()
             player.setProcessor (&graph);
             deviceManager.addAudioCallback (&player);
             deviceRecoveryRetryCount = 0;
+            lastDeviceError.clear();
+            recovered = true;
+        }
+        else
+        {
+            lastDeviceError = error;
         }
     }
 
-    // Release the debounce lock after 3 seconds
-    Timer::callAfterDelay (3000, [this]
+    // Release the debounce lock after 3 seconds.  A failed recovery no longer
+    // relies on another device callback arriving after callbacks were removed;
+    // retry explicitly until the configured limit is reached.
+    auto safeThis = Component::SafePointer<IconMenu>(this);
+    Timer::callAfterDelay (3000, [safeThis, recovered]
     {
-        deviceRecentlyRecovered = false;
+        if (auto* self = safeThis.getComponent())
+        {
+            self->deviceRecentlyRecovered = false;
+            if (!recovered && self->deviceRecoveryRetryCount < maxDeviceRecoveryRetries)
+                self->triggerAudioDeviceRecovery();
+        }
     });
 }
 
@@ -1200,5 +1208,4 @@ void IconMenu::reloadPlugins()
         pluginListWindow.reset(new PluginListWindow(*this, formatManager));
     pluginListWindow->toFront(true);
 }
-
 

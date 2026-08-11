@@ -57,19 +57,22 @@ public:
 private:
     std::unique_ptr<IconMenu> mainWindow;
 
-    StringArray getParameter(String lookFor) {
+    StringArray getParameter(const String& lookFor) {
+        const String prefix = lookFor + "=";
         StringArray parameters = getCommandLineParameterArray();
         StringArray found;
         for (int i = 0; i < parameters.size(); ++i)
         {
             String param = parameters[i];
-            if (param.contains(lookFor))
+            if (param.startsWith(prefix))
             {
-                found.add(lookFor);
-                int delimiter = param.indexOf(0, "=") + 1;
-                String val = param.substring(delimiter);
-                found.add(val);
-                return found;
+                String val = param.substring(prefix.length());
+                if (val.isNotEmpty())
+                {
+                    found.add(lookFor);
+                    found.add(val);
+                    return found;
+                }
             }
         }
         return found;

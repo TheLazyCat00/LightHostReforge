@@ -136,7 +136,8 @@ public:
             return;
         }
 
-        inputChannelsCount = jmin (2, (int) mixFmt->nChannels);
+        sourceChannelsCount = (int) mixFmt->nChannels;
+        inputChannelsCount = jmin (2, sourceChannelsCount);
         baseSampleRate = mixFmt->nSamplesPerSec;
 
         sourceIsFloat = false;
@@ -168,7 +169,7 @@ public:
         if (sourceBytesPerSample < 2)  sourceBytesPerSample = 2;
         if (sourceBytesPerSample > 4)  sourceBytesPerSample = 4;
 
-        sourceBytesPerFrame = sourceBytesPerSample * inputChannelsCount;
+        sourceBytesPerFrame = sourceBytesPerSample * sourceChannelsCount;
 
         // Determine buffer sizes from device period
         REFERENCE_TIME defaultPeriod {}, minPeriod {};
@@ -235,6 +236,7 @@ public:
     {
         close();
         lastError.clear();
+        mShouldShutdown.store (false);
 
         int numInputs = jmin (inputChannelsCount,
                               (int) inputChannels.countNumberOfSetBits());
@@ -357,7 +359,6 @@ public:
         }
 
         call->audioDeviceAboutToStart (this);
-
         {
             const ScopedLock sl (mLock);
             mCallback = call;
@@ -416,6 +417,7 @@ private:
     bool    sourceIsFloat        = true;
     int     sourceBytesPerSample = 4;
     int     sourceBytesPerFrame  = 8;
+    int     sourceChannelsCount  = 2;
     int     inputChannelsCount   = 2;
     double  baseSampleRate       = 48000.0;
     int     defaultBufferSize    = 512;
@@ -486,41 +488,39 @@ private:
             if (FAILED (hr))
                 break;
 
-            if (frames > 0 && ! (flags & AUDCLNT_BUFFERFLAGS_SILENT))
-                deliverAudio (data, (int) frames);
+            if (frames > 0)
+                deliverAudio (data, (int) frames,
+                              (flags & AUDCLNT_BUFFERFLAGS_SILENT) != 0);
 
             mCapture->ReleaseBuffer (frames);
         }
     }
 
-    void deliverAudio (const BYTE* data, int numFrames)
+    void deliverAudio (const BYTE* data, int numFrames, bool isSilent)
     {
         mOutputBuffer.setSize (jmax (1, mNumInputChannels), numFrames + 16);
         mOutputBuffer.clear();
 
         auto* const* outChans = mOutputBuffer.getArrayOfWritePointers();
 
-        if (sourceIsFloat && sourceBytesPerSample == 4)
+        if (!isSilent && data != nullptr)
         {
-            // Float32 interleaved → manual de-interleave (most common WASAPI path)
-            const float* src = reinterpret_cast<const float*> (data);
-            const int srcStride = inputChannelsCount;
-            for (int ch = 0; ch < mNumInputChannels; ++ch)
+            if (sourceIsFloat && sourceBytesPerSample == 4)
             {
-                float* dst = outChans[ch];
-                for (int i = 0; i < numFrames; ++i)
-                    dst[i] = src[i * srcStride + ch];
+                // Float32 interleaved → manual de-interleave (most common WASAPI path)
+                const float* src = reinterpret_cast<const float*> (data);
+                for (int ch = 0; ch < mNumInputChannels; ++ch)
+                {
+                    float* dst = outChans[ch];
+                    for (int i = 0; i < numFrames; ++i)
+                        dst[i] = src[i * sourceChannelsCount + ch];
+                }
             }
-        }
-        else if (mConverter)
-        {
-            for (int ch = 0; ch < mNumInputChannels; ++ch)
-                mConverter->convertSamples (outChans[ch], 0, data, ch, numFrames);
-        }
-        else
-        {
-            for (int ch = 0; ch < mNumInputChannels; ++ch)
-                zeromem (outChans[ch], (size_t) numFrames * sizeof (float));
+            else if (mConverter)
+            {
+                for (int ch = 0; ch < mNumInputChannels; ++ch)
+                    mConverter->convertSamples (outChans[ch], 0, data, ch, numFrames);
+            }
         }
 
         {
@@ -565,16 +565,16 @@ private:
         {
             // Non-32-bit float (unusual, but handle it)
             if (sourceBytesPerSample == 2)
-                mConverter = std::make_unique<AudioData::ConverterInstance<Int16S, FltP>> (inputChannelsCount, 1);
+                mConverter = std::make_unique<AudioData::ConverterInstance<Int16S, FltP>> (sourceChannelsCount, 1);
         }
         else
         {
             if (sourceBytesPerSample == 4)
-                mConverter = std::make_unique<AudioData::ConverterInstance<Int32S, FltP>> (inputChannelsCount, 1);
+                mConverter = std::make_unique<AudioData::ConverterInstance<Int32S, FltP>> (sourceChannelsCount, 1);
             else if (sourceBytesPerSample == 3)
-                mConverter = std::make_unique<AudioData::ConverterInstance<Int24S, FltP>> (inputChannelsCount, 1);
+                mConverter = std::make_unique<AudioData::ConverterInstance<Int24S, FltP>> (sourceChannelsCount, 1);
             else
-                mConverter = std::make_unique<AudioData::ConverterInstance<Int16S, FltP>> (inputChannelsCount, 1);
+                mConverter = std::make_unique<AudioData::ConverterInstance<Int16S, FltP>> (sourceChannelsCount, 1);
         }
     }
 

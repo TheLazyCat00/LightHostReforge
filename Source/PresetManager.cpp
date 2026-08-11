@@ -49,10 +49,25 @@ void PresetManager::savePresetToFile (File file)
             auto* pluginEl = chainXml->getChildElement (i);
             if (pluginEl != nullptr)
             {
-                pluginEl->setAttribute ("winX", (int) appProperties.getUserSettings()->getIntValue (getPluginKey ("winX", slot.desc), -1));
-                pluginEl->setAttribute ("winY", (int) appProperties.getUserSettings()->getIntValue (getPluginKey ("winY", slot.desc), -1));
-                pluginEl->setAttribute ("winW", (int) appProperties.getUserSettings()->getIntValue (getPluginKey ("winW", slot.desc), -1));
-                pluginEl->setAttribute ("winH", (int) appProperties.getUserSettings()->getIntValue (getPluginKey ("winH", slot.desc), -1));
+                auto readGeometry = [&](const String& nodeProperty,
+                                        const String& legacyProperty,
+                                        int fallback)
+                {
+                    if (slot.node != nullptr && slot.node->properties.contains (nodeProperty))
+                        return (int) slot.node->properties[nodeProperty];
+
+                    return (int) appProperties.getUserSettings()->getIntValue (
+                        legacyProperty, fallback);
+                };
+
+                pluginEl->setAttribute ("winX", readGeometry (
+                    getLastXProp (PluginWindow::Normal), getPluginKey ("winX", slot.desc), -1));
+                pluginEl->setAttribute ("winY", readGeometry (
+                    getLastYProp (PluginWindow::Normal), getPluginKey ("winY", slot.desc), -1));
+                pluginEl->setAttribute ("winW", readGeometry (
+                    getLastWProp (PluginWindow::Normal), getPluginKey ("winW", slot.desc), -1));
+                pluginEl->setAttribute ("winH", readGeometry (
+                    getLastHProp (PluginWindow::Normal), getPluginKey ("winH", slot.desc), -1));
             }
         }
     }
@@ -66,9 +81,8 @@ void PresetManager::savePresetToFile (File file)
         outStream.setPosition (0);
         outStream.truncate();
         presetXml->writeTo (outStream);
+        dirty = false;
     }
-
-    dirty = false;
 }
 
 void PresetManager::loadPresetFromFile (File file,
@@ -133,7 +147,8 @@ void PresetManager::loadPresetFromFile (File file,
     }
     else
     {
-        // No chain XML — just rebuild an empty graph
+        // A valid preset with no chain represents an empty chain.
+        pluginChain.clear();
         pluginChain.loadAll();
     }
 
