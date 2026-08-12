@@ -206,8 +206,6 @@ void PluginChain::loadAll()
 
     const AudioProcessorGraph::NodeID INPUT (1000000);
     const AudioProcessorGraph::NodeID OUTPUT (INPUT.uid + 1);
-    const int CHANNEL_ONE = 0;
-    const int CHANNEL_TWO = 1;
 
     // Rebuild IO nodes
     graph.addNode (std::make_unique<AudioProcessorGraph::AudioGraphIOProcessor>(
@@ -246,10 +244,8 @@ void PluginChain::loadAll()
             instance->setStateInformation (slot.state.getData(), slot.state.getSize());
         }
         // Note: slot.state intentionally NOT re-captured here.  The state
-        // decoded from the preset XML is retained as-is; the next call to
-        // savePresetToFile will call getStateInformation on each running
-        // processor.  This avoids doubling the memory/ time for plugins
-        // with large state (samplers, convolution IRs, etc.).
+        // decoded from the preset XML is retained as-is; the next persistence
+        // operation captures current processor state before serialising.
 
         slot.node = graph.addNode (std::move (instance),
             AudioProcessorGraph::NodeID (i + 1));
@@ -268,8 +264,6 @@ void PluginChain::connectChain()
     const AudioProcessorGraph::NodeID INPUT (1000000);
     const AudioProcessorGraph::NodeID OUTPUT (INPUT.uid + 1);
     const AudioProcessorGraph::NodeID MIDI_INPUT (INPUT.uid + 2);
-    const int CHANNEL_ONE = 0;
-    const int CHANNEL_TWO = 1;
 
     // The audio player injects hardware MIDI into the graph's MIDI input node.
     // Keep the node stable and let this class own all MIDI connections so they
@@ -291,7 +285,28 @@ void PluginChain::connectChain()
     auto conn = [&](AudioProcessorGraph::NodeID src, int sc,
                      AudioProcessorGraph::NodeID dst, int dc)
     {
-        graph.addConnection ({ {src, sc}, {dst, dc} });
+        const AudioProcessorGraph::Connection connection { { src, sc }, { dst, dc } };
+        if (graph.canConnect (connection))
+            graph.addConnection (connection);
+    };
+
+    auto connectAudio = [&](AudioProcessorGraph::NodeID src, int srcChannels,
+                            AudioProcessorGraph::NodeID dst, int dstChannels)
+    {
+        srcChannels = jlimit (0, 2, srcChannels);
+        dstChannels = jlimit (0, 2, dstChannels);
+
+        if (srcChannels == 0 || dstChannels == 0)
+            return;
+
+        const int sharedChannels = jmin (srcChannels, dstChannels);
+        for (int channel = 0; channel < sharedChannels; ++channel)
+            conn (src, channel, dst, channel);
+
+        // Preserve a mono source when feeding a stereo destination rather than
+        // leaving the right-hand channel disconnected.
+        if (srcChannels == 1 && dstChannels == 2)
+            conn (src, 0, dst, 1);
     };
 
     auto midiConn = [&](AudioProcessorGraph::NodeID src,
@@ -306,8 +321,11 @@ void PluginChain::connectChain()
             graph.addConnection (connection);
     };
 
-    AudioProcessorGraph::NodeID lastAudioId;
-    bool hasAudioInputConnected = false;
+    // Start with the host's stereo audio input.  MIDI-only processors leave
+    // this source untouched; instruments (no audio inputs, audio outputs)
+    // replace it; audio sinks can tap it without breaking downstream audio.
+    AudioProcessorGraph::NodeID currentAudioSource = INPUT;
+    int currentAudioSourceChannels = 2;
 
     // MIDI starts at the hardware-input node.  A processor that accepts MIDI
     // receives the current stream.  Only processors that actually produce MIDI
@@ -326,49 +344,42 @@ void PluginChain::connectChain()
 
         auto nodeId = slot.node->nodeID;
         auto* processor = slot.node->getProcessor();
+        if (processor == nullptr)
+            continue;
 
-        // Audio remains serial exactly as before.
-        if (!hasAudioInputConnected)
+        const int audioInputs = processor->getTotalNumInputChannels();
+        const int audioOutputs = processor->getTotalNumOutputChannels();
+
+        if (audioInputs > 0)
+            connectAudio (currentAudioSource, currentAudioSourceChannels,
+                          nodeId, audioInputs);
+
+        // A processor with audio outputs becomes the new serial audio source.
+        // This covers ordinary effects and generators/instruments.  Processors
+        // with no audio outputs (for example MIDI-only processors or analyzers)
+        // do not sever the existing audio path.
+        if (audioOutputs > 0)
         {
-            conn (INPUT, CHANNEL_ONE, nodeId, CHANNEL_ONE);
-            conn (INPUT, CHANNEL_TWO, nodeId, CHANNEL_TWO);
-            hasAudioInputConnected = true;
+            currentAudioSource = nodeId;
+            currentAudioSourceChannels = audioOutputs;
         }
-        else
+
+        // MIDI follows the user-visible chain order.  MIDI processors therefore
+        // modify the stream seen by later processors/instruments instead of every
+        // node receiving the original keyboard events in parallel.
+        if (hasMidiSource && processor->acceptsMidi())
+            midiConn (currentMidiSource, nodeId);
+
+        if (processor->producesMidi())
         {
-            conn (lastAudioId, CHANNEL_ONE, nodeId, CHANNEL_ONE);
-            conn (lastAudioId, CHANNEL_TWO, nodeId, CHANNEL_TWO);
-        }
-
-        lastAudioId = nodeId;
-
-        // MIDI is also ordered by the chain.  MIDI processors therefore modify
-        // the stream seen by later processors/instruments instead of every node
-        // receiving the original keyboard events in parallel.
-        if (processor != nullptr)
-        {
-            if (hasMidiSource && processor->acceptsMidi())
-                midiConn (currentMidiSource, nodeId);
-
-            if (processor->producesMidi())
-            {
-                currentMidiSource = nodeId;
-                hasMidiSource = true;
-            }
+            currentMidiSource = nodeId;
+            hasMidiSource = true;
         }
     }
 
-    if (!hasAudioInputConnected)
-    {
-        // All plugins are bypassed/failed — pass audio straight through
-        conn (INPUT, CHANNEL_ONE, OUTPUT, CHANNEL_ONE);
-        conn (INPUT, CHANNEL_TWO, OUTPUT, CHANNEL_TWO);
-    }
-    else if (lastAudioId.uid != 0)
-    {
-        conn (lastAudioId, CHANNEL_ONE, OUTPUT, CHANNEL_ONE);
-        conn (lastAudioId, CHANNEL_TWO, OUTPUT, CHANNEL_TWO);
-    }
+    // Always finish the current audio source at the host output.  With no active
+    // audio processors this is simply the stereo input -> output passthrough.
+    connectAudio (currentAudioSource, currentAudioSourceChannels, OUTPUT, 2);
 }
 
 //==============================================================================
@@ -408,6 +419,15 @@ void PluginChain::loadFromProperties (ApplicationProperties& props)
 
 void PluginChain::saveToProperties (ApplicationProperties& props)
 {
+    // App-property persistence is also used on shutdown, so refresh the cached
+    // state from every live processor first.  Otherwise parameter edits made
+    // since the last explicit preset save would be lost after a restart.
+    for (auto& slot : chain)
+    {
+        if (slot.node != nullptr && !slot.isFailed())
+            slot.node->getProcessor()->getStateInformation (slot.state);
+    }
+
     auto xml = createPresetXml();
     if (xml != nullptr)
     {

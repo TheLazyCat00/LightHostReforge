@@ -58,24 +58,6 @@ else()
     message(STATUS "JUCE_VST3_FORMAT_SRC not found — skipping WaveShell VST3 patch")
 endif()
 
-# JUCE 8 exposes Desktop::isDarkModeActive() as an instance method.  Reforge's
-# older macOS code still calls it statically; patch that one call at configure
-# time so the same source remains compatible with the JUCE 8 package used by
-# vcpkg.  This is idempotent and only touches the source when the old spelling
-# is present.
-if(APPLE)
-    set(_ICON_MENU_SRC "${CMAKE_CURRENT_SOURCE_DIR}/Source/IconMenu.cpp")
-    file(READ "${_ICON_MENU_SRC}" _ICON_MENU_CONTENT)
-    string(REPLACE
-        "Desktop::isDarkModeActive()"
-        "Desktop::getInstance().isDarkModeActive()"
-        _ICON_MENU_PATCHED "${_ICON_MENU_CONTENT}")
-    if(NOT _ICON_MENU_CONTENT STREQUAL _ICON_MENU_PATCHED)
-        message(STATUS "Updating macOS dark-mode call for JUCE 8")
-        file(WRITE "${_ICON_MENU_SRC}" "${_ICON_MENU_PATCHED}")
-    endif()
-endif()
-
 #==============================================================================
 # Application target
 #==============================================================================
