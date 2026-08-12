@@ -231,20 +231,14 @@ public:
 
     String open (const BigInteger& inputChannels,
                  const BigInteger& /*outputChannels*/,
-                 double sampleRate,
+                 double /*sampleRate*/,
                  int bufferSizeSamples) override
     {
         close();
         lastError.clear();
         mShouldShutdown.store (false);
 
-        int numInputs = jmin (inputChannelsCount,
-                              (int) inputChannels.countNumberOfSetBits());
-        if (numInputs == 0)  numInputs = inputChannelsCount;
-
-        mNumInputChannels    = numInputs;
-        mBufferSizeSamples   = bufferSizeSamples > 0 ? bufferSizeSamples : defaultBufferSize;
-        mCurrentSampleRate   = sampleRate > 0 ? sampleRate : (double) baseSampleRate;
+        mBufferSizeSamples = bufferSizeSamples > 0 ? bufferSizeSamples : defaultBufferSize;
 
         // Activate fresh IAudioClient
         if (FAILED (mDevice->Activate (__uuidof (IAudioClient), CLSCTX_INPROC_SERVER,
@@ -254,13 +248,57 @@ public:
             return lastError;
         }
 
-        // Get mix format
+        // Get the current endpoint mix format. The output format may have
+        // changed since this device object was constructed, so every field used
+        // for packet stride/conversion must be refreshed before opening.
         WAVEFORMATEX* fmt = nullptr;
         if (FAILED (mClient->GetMixFormat (&fmt)))
         {
             lastError = "Failed to get mix format";
             return lastError;
         }
+
+        sourceChannelsCount = (int) fmt->nChannels;
+        inputChannelsCount = jmin (2, sourceChannelsCount);
+        baseSampleRate = fmt->nSamplesPerSec;
+
+        sourceIsFloat = false;
+        sourceBytesPerSample = 2;
+
+        if (fmt->wFormatTag == WAVE_FORMAT_EXTENSIBLE)
+        {
+            auto* ext = reinterpret_cast<WAVEFORMATEXTENSIBLE*> (fmt);
+            if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_IEEE_FLOAT)
+            {
+                sourceIsFloat = true;
+                sourceBytesPerSample = fmt->wBitsPerSample / 8;
+            }
+            else if (ext->SubFormat == KSDATAFORMAT_SUBTYPE_PCM)
+            {
+                sourceBytesPerSample = fmt->wBitsPerSample / 8;
+            }
+        }
+        else if (fmt->wFormatTag == WAVE_FORMAT_IEEE_FLOAT)
+        {
+            sourceIsFloat = true;
+            sourceBytesPerSample = fmt->wBitsPerSample / 8;
+        }
+        else if (fmt->wFormatTag == WAVE_FORMAT_PCM)
+        {
+            sourceBytesPerSample = fmt->wBitsPerSample / 8;
+        }
+
+        if (sourceBytesPerSample < 2)  sourceBytesPerSample = 2;
+        if (sourceBytesPerSample > 4)  sourceBytesPerSample = 4;
+
+        sourceBytesPerFrame = sourceBytesPerSample * sourceChannelsCount;
+
+        int numInputs = jmin (inputChannelsCount,
+                              (int) inputChannels.countNumberOfSetBits());
+        if (numInputs == 0)  numInputs = inputChannelsCount;
+
+        mNumInputChannels = numInputs;
+        mCurrentSampleRate = (double) baseSampleRate;
 
         REFERENCE_TIME bufDur = samplesToRefTime (mBufferSizeSamples, mCurrentSampleRate);
 
