@@ -59,8 +59,99 @@ else()
 endif()
 
 #==============================================================================
-# Application target
+# Application targets
 #==============================================================================
+
+option(LIGHTHOST_BUILD_CLI "Build the console-subsystem Light Host CLI executable" ON)
+option(LIGHTHOST_CLI_KEEP_SYMBOLS
+       "Build LightHostCLI without optimisation/LTO and retain full debugger symbols" ON)
+
+set(LIGHTHOST_SOURCES
+    Source/HostStartup.cpp
+    Source/IconMenu.cpp
+    Source/AudioSettingsComponent.cpp
+    Source/PluginChain.cpp
+    Source/PluginWindow.cpp
+    Source/PresetManager.cpp
+)
+
+# Binary resources are shared by the GUI and CLI-subsystem executables.
+juce_add_binary_data(LightHost_Resources
+    NAMESPACE BinaryData
+    SOURCES
+        Resources/icon.png
+        Resources/menu_icon.png
+        Resources/menu_icon_white.png
+)
+
+if(WIN32)
+    find_path(ASIOSDK_INCLUDE_DIR iasiodrv.h PATH_SUFFIXES asiosdk/common)
+    if(ASIOSDK_INCLUDE_DIR)
+        message(STATUS "ASIO SDK found: ${ASIOSDK_INCLUDE_DIR}")
+    else()
+        message(FATAL_ERROR "ASIO SDK not found. "
+            "Install via: vcpkg install asiosdk  "
+            "Or set CMAKE_PREFIX_PATH to the SDK location")
+    endif()
+endif()
+
+function(configure_light_host_target target)
+    target_sources(${target} PRIVATE ${LIGHTHOST_SOURCES})
+
+    target_compile_definitions(${target} PRIVATE
+        JUCE_PLUGINHOST_VST3=1
+        JUCE_PLUGINHOST_VST=0
+        JUCE_USE_CURL=0
+        JUCE_WEB_BROWSER=0
+        JUCE_MODAL_LOOPS_PERMITTED=1
+        JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:${target},JUCE_PRODUCT_NAME>"
+        JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:${target},JUCE_VERSION>"
+    )
+
+    if(WIN32)
+        target_compile_definitions(${target} PRIVATE JUCE_ASIO=1)
+        target_include_directories(${target} PRIVATE ${ASIOSDK_INCLUDE_DIR})
+    else()
+        target_compile_definitions(${target} PRIVATE JUCE_ASIO=0)
+    endif()
+
+    if(APPLE)
+        target_compile_definitions(${target} PRIVATE JUCE_PLUGINHOST_AU=1)
+    else()
+        target_compile_definitions(${target} PRIVATE JUCE_PLUGINHOST_AU=0)
+    endif()
+
+    target_link_libraries(${target} PRIVATE
+        juce::juce_audio_utils
+        juce::juce_gui_extra
+        juce::juce_data_structures
+        LightHost_Resources
+    )
+
+    target_link_libraries(${target} PUBLIC
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+    )
+endfunction()
+
+function(make_reverse_engineering_friendly target)
+    # Keep functions visible and stable for Binary Ninja/x64dbg:
+    # no LTO, no inlining/optimisation, frame pointers retained, and no
+    # linker dead-stripping or identical-code folding.
+    set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
+
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /Od /Ob0 /Zi /Oy-)
+        target_link_options(${target} PRIVATE /DEBUG:FULL /OPT:NOREF /OPT:NOICF)
+    elseif(APPLE)
+        target_compile_options(${target} PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline)
+        target_link_options(${target} PRIVATE -Wl,-no_dead_strip)
+    else()
+        target_compile_options(${target} PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline)
+        target_link_options(${target} PRIVATE -Wl,--no-gc-sections -Wl,--export-dynamic)
+    endif()
+endfunction()
+
 juce_add_gui_app(LightHost
     PRODUCT_NAME "Light Host"
     COMPANY_NAME "Rolando Islas"
@@ -71,83 +162,26 @@ juce_add_gui_app(LightHost
     ICON_BIG "Resources/icon.png"
     ICON_SMALL "Resources/icon.png"
 )
+configure_light_host_target(LightHost)
 
-#==============================================================================
-# Feature configuration
-#==============================================================================
-target_compile_definitions(LightHost PRIVATE
-    JUCE_PLUGINHOST_VST3=1
-    JUCE_PLUGINHOST_VST=0
-    JUCE_USE_CURL=0
-    JUCE_WEB_BROWSER=0
-    JUCE_MODAL_LOOPS_PERMITTED=1
-    JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:LightHost,JUCE_PRODUCT_NAME>"
-    JUCE_APPLICATION_VERSION_STRING="$<TARGET_PROPERTY:LightHost,JUCE_VERSION>"
-)
+# Keep the normal tray-host build optimised.
+target_link_libraries(LightHost PUBLIC juce::juce_recommended_lto_flags)
 
-# ASIO is Windows-only. Keeping this conditional is required for macOS builds,
-# where the ASIO SDK is unavailable and CoreAudio is used instead.
-if(WIN32)
-    target_compile_definitions(LightHost PRIVATE JUCE_ASIO=1)
+if(LIGHTHOST_BUILD_CLI)
+    # This is still a full JUCE GUI application and can display the real plugin
+    # editor. The console subsystem only adds usable stdin/stdout/stderr when
+    # launched from a terminal or debugger.
+    juce_add_console_app(LightHostCLI
+        PRODUCT_NAME "Light Host CLI"
+        COMPANY_NAME "Rolando Islas"
+        VERSION "1.2.0"
+    )
+    configure_light_host_target(LightHostCLI)
+    target_compile_definitions(LightHostCLI PRIVATE LIGHTHOST_CLI_BUILD=1)
 
-    find_path(ASIOSDK_INCLUDE_DIR iasiodrv.h PATH_SUFFIXES asiosdk/common)
-    if(ASIOSDK_INCLUDE_DIR)
-        target_include_directories(LightHost PRIVATE ${ASIOSDK_INCLUDE_DIR})
-        message(STATUS "ASIO SDK found: ${ASIOSDK_INCLUDE_DIR}")
+    if(LIGHTHOST_CLI_KEEP_SYMBOLS)
+        make_reverse_engineering_friendly(LightHostCLI)
     else()
-        message(FATAL_ERROR "ASIO SDK not found. "
-            "Install via: vcpkg install asiosdk  "
-            "Or set CMAKE_PREFIX_PATH to the SDK location")
+        target_link_libraries(LightHostCLI PUBLIC juce::juce_recommended_lto_flags)
     endif()
-else()
-    target_compile_definitions(LightHost PRIVATE JUCE_ASIO=0)
 endif()
-
-# Audio Unit hosting — macOS only
-if(APPLE)
-    target_compile_definitions(LightHost PRIVATE JUCE_PLUGINHOST_AU=1)
-else()
-    target_compile_definitions(LightHost PRIVATE JUCE_PLUGINHOST_AU=0)
-endif()
-
-#==============================================================================
-# Source files
-#==============================================================================
-target_sources(LightHost PRIVATE
-    Source/HostStartup.cpp
-    Source/IconMenu.cpp
-    Source/AudioSettingsComponent.cpp
-    Source/PluginChain.cpp
-    Source/PluginWindow.cpp
-    Source/PresetManager.cpp
-)
-
-#==============================================================================
-# JUCE modules
-#==============================================================================
-target_link_libraries(LightHost PRIVATE
-    juce::juce_audio_utils
-    juce::juce_gui_extra
-    juce::juce_data_structures
-)
-
-#==============================================================================
-# Recommended flags (optimisation, LTO, warnings — from JUCE CMake API)
-#==============================================================================
-target_link_libraries(LightHost PUBLIC
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_lto_flags
-    juce::juce_recommended_warning_flags
-)
-
-#==============================================================================
-# Binary resources (icons used via BinaryData:: in runtime code)
-#==============================================================================
-juce_add_binary_data(LightHost_Resources
-    NAMESPACE BinaryData
-    SOURCES
-        Resources/icon.png
-        Resources/menu_icon.png
-        Resources/menu_icon_white.png
-)
-target_link_libraries(LightHost PRIVATE LightHost_Resources)
