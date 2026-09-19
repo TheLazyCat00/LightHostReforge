@@ -129,7 +129,6 @@ function(configure_light_host_target target)
     )
 
     target_link_libraries(${target} PUBLIC
-        juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
     )
 endfunction()
@@ -141,7 +140,7 @@ function(make_reverse_engineering_friendly target)
     set_property(TARGET ${target} PROPERTY INTERPROCEDURAL_OPTIMIZATION FALSE)
 
     if(MSVC)
-        target_compile_options(${target} PRIVATE /Od /Ob0 /Zi /Oy-)
+        target_compile_options(${target} PRIVATE /MP /EHsc /Od /Ob0 /Zi /Oy-)
         target_link_options(${target} PRIVATE /DEBUG:FULL /OPT:NOREF /OPT:NOICF)
     elseif(APPLE)
         target_compile_options(${target} PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline)
@@ -165,7 +164,10 @@ juce_add_gui_app(LightHost
 configure_light_host_target(LightHost)
 
 # Keep the normal tray-host build optimised.
-target_link_libraries(LightHost PUBLIC juce::juce_recommended_lto_flags)
+target_link_libraries(LightHost PUBLIC
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_lto_flags
+)
 
 if(LIGHTHOST_BUILD_CLI)
     # This is still a full JUCE GUI application and can display the real plugin
@@ -191,6 +193,9 @@ if(LIGHTHOST_BUILD_CLI)
             )
         endif()
     else()
-        target_link_libraries(LightHostCLI PUBLIC juce::juce_recommended_lto_flags)
+        target_link_libraries(LightHostCLI PUBLIC
+            juce::juce_recommended_config_flags
+            juce::juce_recommended_lto_flags
+        )
     endif()
 endif()
