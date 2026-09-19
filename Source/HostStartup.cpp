@@ -18,7 +18,7 @@ public:
 
         if (parsed.showHelp)
         {
-            std::cout << usageText() << std::endl;
+            std::cout << usageText().toStdString() << std::endl;
             setApplicationReturnValue (0);
             quit();
             return;
@@ -26,7 +26,8 @@ public:
 
         if (parsed.showVersion)
         {
-            std::cout << getApplicationName() << " " << getApplicationVersion() << std::endl;
+            std::cout << getApplicationName().toStdString() << " "
+                      << getApplicationVersion().toStdString() << std::endl;
             setApplicationReturnValue (0);
             quit();
             return;
@@ -34,8 +35,8 @@ public:
 
         if (parsed.error.isNotEmpty())
         {
-            std::cerr << "Light Host: " << parsed.error << "\n\n"
-                      << usageText() << std::endl;
+            std::cerr << "Light Host: " << parsed.error.toStdString() << "\n\n"
+                      << usageText().toStdString() << std::endl;
             setApplicationReturnValue (2);
             quit();
             return;
