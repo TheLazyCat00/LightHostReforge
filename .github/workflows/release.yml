@@ -78,18 +78,37 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/package | Out-Null
+          Copy-Item "build/LightHost_artefacts/Release/Light Host.exe" "dist/package/"
+          Copy-Item "build/LightHostCLI_artefacts/Release/Light Host CLI.exe" "dist/package/"
+
+          $pdbs = @(Get-ChildItem "build/LightHostCLI_artefacts/Release" -Filter "*.pdb")
+          if ($pdbs.Count -eq 0) {
+            throw "LightHostCLI PDB was not generated"
+          }
+          $pdbs | ForEach-Object { Copy-Item $_.FullName "dist/package/" }
+
           Compress-Archive `
-            -Path "build/LightHost_artefacts/Release/Light Host.exe" `
+            -Path "dist/package/*" `
             -DestinationPath "dist/${{ matrix.artifact }}.zip"
 
       - name: Package macOS build
         if: matrix.platform == 'macos'
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p dist/package
+          cp -R "build/LightHost_artefacts/Release/Light Host.app" "dist/package/"
+          cp "build/LightHostCLI_artefacts/Release/Light Host CLI" "dist/package/"
+
+          DSYM="build/LightHostCLI_artefacts/Release/Light Host CLI.dSYM"
+          if [ ! -d "$DSYM" ]; then
+            echo "LightHostCLI dSYM was not generated" >&2
+            exit 1
+          fi
+          cp -R "$DSYM" "dist/package/"
+
           ditto -c -k --sequesterRsrc --keepParent \
-            "build/LightHost_artefacts/Release/Light Host.app" \
+            "dist/package" \
             "dist/${{ matrix.artifact }}.zip"
 
       - name: Upload build artifact
