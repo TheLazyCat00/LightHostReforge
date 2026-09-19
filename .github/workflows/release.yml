@@ -30,11 +30,13 @@ jobs:
             platform: macos
             triplet: arm64-osx
             artifact: LightHostReforge-macos-arm64
+            use_devbox: true
           - name: macOS Intel
             os: macos-15-intel
             platform: macos
             triplet: x64-osx
             artifact: LightHostReforge-macos-x64
+            use_devbox: false
 
     runs-on: ${{ matrix.os }}
 
@@ -48,8 +50,15 @@ jobs:
         run: |
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install juce:${{ matrix.triplet }} asiosdk:${{ matrix.triplet }}
 
-      - name: Install dependencies (macOS)
-        if: matrix.platform == 'macos'
+      - name: Install Devbox (macOS Apple Silicon)
+        if: matrix.platform == 'macos' && matrix.use_devbox
+        uses: jetify-com/devbox-install-action@8c6a66ed6273138b1915457069de78cb52fe3bd7 # v0.15.0
+        with:
+          enable-cache: 'true'
+          devbox-version: '0.17.5'
+
+      - name: Install dependencies (macOS Intel)
+        if: matrix.platform == 'macos' && !matrix.use_devbox
         shell: bash
         run: |
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install juce:${{ matrix.triplet }}
@@ -62,8 +71,13 @@ jobs:
             "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
             "-DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}"
 
-      - name: Configure (macOS)
-        if: matrix.platform == 'macos'
+      - name: Configure (macOS Apple Silicon)
+        if: matrix.platform == 'macos' && matrix.use_devbox
+        shell: bash
+        run: devbox run configure
+
+      - name: Configure (macOS Intel)
+        if: matrix.platform == 'macos' && !matrix.use_devbox
         shell: bash
         run: |
           cmake -S . -B build \
@@ -71,25 +85,55 @@ jobs:
             -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
 
-      - name: Build
+      - name: Build (Windows)
+        if: matrix.platform == 'windows'
+        run: cmake --build build --config Release --parallel
+
+      - name: Build (macOS Apple Silicon)
+        if: matrix.platform == 'macos' && matrix.use_devbox
+        shell: bash
+        run: devbox run build
+
+      - name: Build (macOS Intel)
+        if: matrix.platform == 'macos' && !matrix.use_devbox
+        shell: bash
         run: cmake --build build --config Release --parallel
 
       - name: Package Windows build
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/package | Out-Null
+          Copy-Item "build/LightHost_artefacts/Release/Light Host.exe" "dist/package/"
+          Copy-Item "build/LightHostCLI_artefacts/Release/lhc.exe" "dist/package/"
+
+          $pdbs = @(Get-ChildItem "build/LightHostCLI_artefacts/Release" -Filter "*.pdb")
+          if ($pdbs.Count -eq 0) {
+            throw "LightHostCLI PDB was not generated"
+          }
+          $pdbs | ForEach-Object { Copy-Item $_.FullName "dist/package/" }
+
           Compress-Archive `
-            -Path "build/LightHost_artefacts/Release/Light Host.exe" `
+            -Path "dist/package/*" `
             -DestinationPath "dist/${{ matrix.artifact }}.zip"
 
       - name: Package macOS build
         if: matrix.platform == 'macos'
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p dist/package
+          cp -R "build/LightHost_artefacts/Release/Light Host.app" "dist/package/"
+          cp "build/LightHostCLI_artefacts/Release/lhc" "dist/package/"
+
+          DSYM="build/LightHostCLI_artefacts/Release/lhc.dSYM"
+          if [ ! -d "$DSYM" ]; then
+            echo "LightHostCLI dSYM was not generated" >&2
+            exit 1
+          fi
+          cp -R "$DSYM" "dist/package/"
+
           ditto -c -k --sequesterRsrc --keepParent \
-            "build/LightHost_artefacts/Release/Light Host.app" \
+            "dist/package" \
             "dist/${{ matrix.artifact }}.zip"
 
       - name: Upload build artifact

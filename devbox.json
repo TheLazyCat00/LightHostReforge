@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.17.5/.schema/devbox.schema.json",
+  "packages": [
+    "cmake@4.1.2",
+    "ninja@1.13.1",
+    "pkg-config@0.29.2",
+    "juce@8.0.12"
+  ],
+  "shell": {
+    "init_hook": [],
+    "scripts": {
+      "configure": "cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release",
+      "build": "cmake --build build --parallel",
+      "clean": "rm -rf build"
+    }
+  }
+}

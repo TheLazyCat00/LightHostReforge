@@ -47,6 +47,69 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 cmake --build build --config Release
 ```
 
+### Development environment
+
+The canonical Unix development environment is defined by `devbox.json`.
+On Linux, macOS, or Windows through WSL:
+
+```bash
+devbox install
+devbox run configure
+devbox run build
+```
+
+Devbox pins CMake, Ninja, pkg-config, and JUCE for reproducible local development
+and Apple Silicon macOS CI builds. Native Windows CI remains on MSVC + vcpkg
+because Devbox is not a native Windows build environment and the Windows host
+needs the native ASIO/MSVC toolchain. The macOS Intel CI job also remains on
+vcpkg because current Devbox/Nix upstream support for x86_64-darwin is broken.
+The source supports both the JUCE 8.0.7 API used by vcpkg and JUCE 8.0.9+
+used by the Devbox environment.
+
+### Debug / CLI host
+
+The build also produces **Light Host CLI**, a console-subsystem variant intended for
+Binary Ninja, x64dbg, WinDbg, LLDB, and other reverse-engineering/debugging workflows.
+It still runs the full JUCE message loop and can display the plugin's real editor.
+
+`--debug` switches the host to a synthetic stereo device. The graph is prepared with
+a normal sample rate and block size, but **no real-time audio callback thread is
+started**. You can stop at a breakpoint for as long as necessary without underrunning
+an ASIO/CoreAudio device or freezing a DAW.
+
+Example:
+
+```powershell
+& ".\lhc.exe" --debug --plugin "C:\Program Files\Common Files\VST3\Example.vst3" --sample-rate 48000 --block-size 512
+```
+
+If a shell contains several plugin types, select one explicitly:
+
+```powershell
+& ".\lhc.exe" --debug --plugin "C:\Program Files\Common Files\VST3\WaveShell1-VST3 15.0_x64.vst3" --plugin-name "Clarity Vx"
+```
+
+Useful options:
+
+- `--plugin <path>` loads a plugin directly and opens its editor; repeat it to load a chain.
+- `--plugin-name <name>` selects a sub-plugin from the most recent shell path.
+- `--append` keeps the persisted chain and appends CLI plugins instead of starting isolated.
+- `--no-editor` skips automatically opening plugin GUIs.
+- `--sample-rate <hz>` and `--block-size <samples>` configure the synthetic debug device.
+- `--process-blocks <count>` manually processes silent blocks once at startup.
+- `--exit-after-process` exits after the requested batch, which is useful for scripted debugger runs.
+- `--help` prints the complete command-line reference.
+
+Debug mode uses a separate settings file and permits multiple instances, so it can run
+alongside the normal tray host without replacing its saved chain or audio-device setup.
+The tray menu also exposes **Process 1 silent block** and **Process 100 silent blocks**
+while debug mode is active.
+
+`lhc` is intentionally built without optimisation, inlining, LTO, dead-code
+stripping, or identical-code folding. Frame pointers and full debugger symbols are kept.
+Windows builds emit and package a full PDB; macOS builds emit and package a dSYM. Set
+`-DLIGHTHOST_CLI_KEEP_SYMBOLS=OFF` if you want an optimised CLI binary instead.
+
 Pushing a tag matching `v*` runs the release workflow and publishes packaged Windows and macOS builds.
 
 ### Screenshot

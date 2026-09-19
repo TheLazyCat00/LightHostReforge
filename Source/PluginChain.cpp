@@ -14,8 +14,10 @@
 //==============================================================================
 PluginChain::PluginChain (AudioProcessorGraph& graphRef,
                           AudioPluginFormatManager& fmRef,
-                          AudioStream& audioStreamRef)
-    : graph (graphRef), formatManager (fmRef), audioStream (audioStreamRef)
+                          AudioStream& audioStreamRef,
+                          bool nonRealtimeMode)
+    : graph (graphRef), formatManager (fmRef), audioStream (audioStreamRef),
+      nonRealtime (nonRealtimeMode)
 {
 }
 
@@ -46,6 +48,7 @@ int PluginChain::add (const PluginDescription& desc)
     }
     else
     {
+        instance->setNonRealtime (nonRealtime);
         instance->setRateAndBufferSizeDetails (graph.getSampleRate(), graph.getBlockSize());
 
         // Capture default state for persistence
@@ -236,6 +239,7 @@ void PluginChain::loadAll()
             continue;
         }
 
+        instance->setNonRealtime (nonRealtime);
         instance->setRateAndBufferSizeDetails (graph.getSampleRate(), graph.getBlockSize());
 
         // Restore saved state if available

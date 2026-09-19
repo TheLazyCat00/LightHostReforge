@@ -16,6 +16,7 @@
 #include "PresetManager.hpp"
 #include "AudioStream.hpp"
 #include "LoopbackCaptureDevice.hpp"
+#include "HostOptions.hpp"
 
 using namespace juce;
 
@@ -31,7 +32,7 @@ ApplicationProperties& getAppProperties();
 class IconMenu : public SystemTrayIconComponent, private Timer, public ChangeListener
 {
 public:
-    IconMenu();
+    explicit IconMenu (const HostOptions& options = {});
     ~IconMenu();
     void mouseDown(const MouseEvent&);
     static void menuInvocationCallback(int id, IconMenu*);
@@ -48,8 +49,13 @@ public:
     void movePluginDown(int timeSortedIndex);
     bool isBypassed(int timeSortedIndex);
 
+    /** Process a fixed number of silent blocks on the message thread.
+        Only available in --debug mode, where no real-time device callback runs. */
+    bool processDebugBlocks (int blockCount, String* errorMessage = nullptr);
+
     const int INDEX_EDIT, INDEX_BYPASS, INDEX_DELETE, INDEX_MOVE_UP, INDEX_MOVE_DOWN;
     const int INDEX_PRESET_SAVE, INDEX_PRESET_SAVE_AS, INDEX_PRESET_LOAD_SELECT, INDEX_PRESET_NEW, INDEX_PRESET_LOAD_FILE;
+    const int INDEX_DEBUG_PROCESS_ONE, INDEX_DEBUG_PROCESS_HUNDRED;
 
     /** @internal */
     static constexpr int maxDeviceRecoveryRetries = 5;
@@ -59,7 +65,12 @@ private:
     void reloadPlugins();
     void showAudioSettings();
     void setIcon();
+    bool loadPluginRequest (const PluginLaunchRequest& request, String& errorMessage);
+    void openPluginEditor (int index);
+    void applyStartupOptions();
 
+    HostOptions hostOptions;
+    bool chainPersistenceEnabled = true;
     AudioDeviceManager deviceManager;
     AudioPluginFormatManager formatManager;
     KnownPluginList knownPluginList;
@@ -68,6 +79,8 @@ private:
     bool menuIconLeftClicked;
     AudioProcessorGraph graph;
     AudioStream player{ deviceManager };
+    AudioBuffer<float> debugAudioBuffer;
+    MidiBuffer debugMidiBuffer;
     #if JUCE_WINDOWS
     int x, y;
     #endif
