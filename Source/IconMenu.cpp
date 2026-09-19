@@ -491,7 +491,11 @@ IconMenu::IconMenu (const HostOptions& options)
       hostOptions (options)
 {
     // Initialization
+   #if JUCE_VERSION >= 0x080009
+    addDefaultFormatsToManager (formatManager);
+   #else
     formatManager.addDefaultFormats();
+   #endif
 #if JUCE_WINDOWS
     x = y = 0;
 #endif
