@@ -47,6 +47,22 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
 cmake --build build --config Release
 ```
 
+### Development environment
+
+The canonical Unix development environment is defined by `devbox.json`.
+On Linux, macOS, or Windows through WSL:
+
+```bash
+devbox install
+devbox run configure
+devbox run build
+```
+
+Devbox pins CMake, Ninja, pkg-config, and JUCE for reproducible local and macOS
+CI builds. Native Windows CI remains on MSVC + vcpkg because Devbox itself runs
+on Linux/macOS/WSL rather than as a native Windows build environment, and the
+Windows host needs the native ASIO/MSVC toolchain.
+
 ### Debug / CLI host
 
 The build also produces **Light Host CLI**, a console-subsystem variant intended for
@@ -61,13 +77,13 @@ an ASIO/CoreAudio device or freezing a DAW.
 Example:
 
 ```powershell
-& ".\Light Host CLI.exe" --debug --plugin "C:\Program Files\Common Files\VST3\Example.vst3" --sample-rate 48000 --block-size 512
+& ".\lhc.exe" --debug --plugin "C:\Program Files\Common Files\VST3\Example.vst3" --sample-rate 48000 --block-size 512
 ```
 
 If a shell contains several plugin types, select one explicitly:
 
 ```powershell
-& ".\Light Host CLI.exe" --debug --plugin "C:\Program Files\Common Files\VST3\WaveShell1-VST3 15.0_x64.vst3" --plugin-name "Clarity Vx"
+& ".\lhc.exe" --debug --plugin "C:\Program Files\Common Files\VST3\WaveShell1-VST3 15.0_x64.vst3" --plugin-name "Clarity Vx"
 ```
 
 Useful options:
@@ -86,7 +102,7 @@ alongside the normal tray host without replacing its saved chain or audio-device
 The tray menu also exposes **Process 1 silent block** and **Process 100 silent blocks**
 while debug mode is active.
 
-`LightHostCLI` is intentionally built without optimisation, inlining, LTO, dead-code
+`lhc` is intentionally built without optimisation, inlining, LTO, dead-code
 stripping, or identical-code folding. Frame pointers and full debugger symbols are kept.
 Windows builds emit and package a full PDB; macOS builds emit and package a dSYM. Set
 `-DLIGHTHOST_CLI_KEEP_SYMBOLS=OFF` if you want an optimised CLI binary instead.
