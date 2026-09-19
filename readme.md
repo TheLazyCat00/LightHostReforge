@@ -1,8 +1,6 @@
 Light Host Reforge
 ---
 
-English|[简体中文](readme_zh.md)
-
 A fork of [LightHost](https://github.com/opencma/LightHost) with the following changes:
 
 - Ported to JUCE8
@@ -25,6 +23,28 @@ Notes:
 - AU hosting is enabled on macOS; VST3 hosting is enabled on Windows and macOS
 - Windows loopback capture remains Windows-only
 - macOS release artifacts are currently unsigned and unnotarized
+
+## Install lhc
+
+Install the latest released `lhc` binary with a single command.
+
+macOS:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/TheLazyCat00/LightHostReforge/master/install.sh)"
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/TheLazyCat00/LightHostReforge/master/install.ps1 | iex
+```
+
+The installer downloads the matching asset from the latest GitHub release and installs
+`lhc` together with its debugger symbols. On macOS it installs to
+`/usr/local/bin` by default; on Windows it installs to
+`%LOCALAPPDATA%\LightHostReforge\bin` and adds that directory to the user `PATH`.
+Set `LHC_INSTALL_DIR` to override the destination. Re-run the same command to update.
 
 ## Build
 
