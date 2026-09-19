@@ -56,7 +56,8 @@ class PluginChain
 public:
     PluginChain (AudioProcessorGraph& graphRef,
                  AudioPluginFormatManager& fmRef,
-                 AudioStream& audioStreamRef);
+                 AudioStream& audioStreamRef,
+                 bool nonRealtimeMode = false);
 
     ~PluginChain();
 
@@ -171,6 +172,7 @@ private:
     AudioProcessorGraph&        graph;
     AudioPluginFormatManager&   formatManager;
     AudioStream&                audioStream;
+    bool                        nonRealtime = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginChain)
 };
