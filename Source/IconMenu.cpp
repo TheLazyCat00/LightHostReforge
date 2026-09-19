@@ -14,7 +14,9 @@
 #include "PluginWindow.h"
 #include "AudioSettingsComponent.hpp"
 #include "NoneAudioDevice.hpp"
+#include "DebugAudioDevice.hpp"
 #include <algorithm>
+#include <iostream>
 #include <ctime>
 #include <climits>
 #if JUCE_WINDOWS
@@ -479,11 +481,14 @@ private:
     }
 };
 
-IconMenu::IconMenu() : INDEX_EDIT(1000000), INDEX_BYPASS(2000000), INDEX_DELETE(3000000),
-INDEX_MOVE_UP(4000000), INDEX_MOVE_DOWN(5000000),
-INDEX_PRESET_SAVE(6000000), INDEX_PRESET_SAVE_AS(6000001),
-INDEX_PRESET_LOAD_SELECT(6000002), INDEX_PRESET_NEW(6000003),
-INDEX_PRESET_LOAD_FILE(7000000)
+IconMenu::IconMenu (const HostOptions& options)
+    : INDEX_EDIT(1000000), INDEX_BYPASS(2000000), INDEX_DELETE(3000000),
+      INDEX_MOVE_UP(4000000), INDEX_MOVE_DOWN(5000000),
+      INDEX_PRESET_SAVE(6000000), INDEX_PRESET_SAVE_AS(6000001),
+      INDEX_PRESET_LOAD_SELECT(6000002), INDEX_PRESET_NEW(6000003),
+      INDEX_PRESET_LOAD_FILE(7000000),
+      INDEX_DEBUG_PROCESS_ONE(8000000), INDEX_DEBUG_PROCESS_HUNDRED(8000001),
+      hostOptions (options)
 {
     // Initialization
     formatManager.addDefaultFormats();
@@ -514,34 +519,65 @@ INDEX_PRESET_LOAD_FILE(7000000)
         auto* noneType = new NoneAudioIODeviceType();
         noneType->scanForDevices();
         deviceManager.addAudioDeviceType(std::unique_ptr<AudioIODeviceType>(noneType));
+
+        if (hostOptions.debugMode)
+        {
+            auto* debugType = new DebugAudioIODeviceType();
+            debugType->scanForDevices();
+            deviceManager.addAudioDeviceType(std::unique_ptr<AudioIODeviceType>(debugType));
+        }
     }
 
     // Audio device
     auto* settings = getAppProperties().getUserSettings();
-    auto savedAudioState = settings->getXmlValue("audioDeviceState");
+    String audioInitError;
 
-    // Try to load per-device-type state: extract the device type from the
-    // generic key and look for a more recent type-specific key.
-    if (savedAudioState)
+    if (hostOptions.debugMode)
     {
-        if (auto* typeEl = savedAudioState->getChildByName("DEVICETYPE"))
+        // The Debug device has logical stereo I/O so JUCE prepares the graph
+        // exactly like a normal host, but its start() method never invokes the
+        // real-time audio callback. Debugger stops therefore cannot underrun,
+        // deadlock, or trip an external host watchdog.
+        player.fadeEnabled.store (false);
+        deviceManager.setCurrentAudioDeviceType (DebugAudioIODevice::typeName(), false);
+
+        AudioDeviceManager::AudioDeviceSetup debugSetup;
+        debugSetup.inputDeviceName = DebugAudioIODevice::deviceName();
+        debugSetup.outputDeviceName = DebugAudioIODevice::deviceName();
+        debugSetup.sampleRate = hostOptions.sampleRate;
+        debugSetup.bufferSize = hostOptions.blockSize;
+        debugSetup.useDefaultInputChannels = true;
+        debugSetup.useDefaultOutputChannels = true;
+
+        audioInitError = deviceManager.initialise (2, 2, nullptr, false, {}, &debugSetup);
+    }
+    else
+    {
+        auto savedAudioState = settings->getXmlValue("audioDeviceState");
+
+        // Try to load per-device-type state: extract the device type from the
+        // generic key and look for a more recent type-specific key.
+        if (savedAudioState)
         {
-            auto deviceType = typeEl->getAllSubText();
-            if (deviceType.isNotEmpty())
+            if (auto* typeEl = savedAudioState->getChildByName("DEVICETYPE"))
             {
-                auto perTypeKey = "audioDeviceState_" + deviceType;
-                if (auto perTypeState = settings->getXmlValue(perTypeKey))
-                    savedAudioState = std::move(perTypeState);
+                auto deviceType = typeEl->getAllSubText();
+                if (deviceType.isNotEmpty())
+                {
+                    auto perTypeKey = "audioDeviceState_" + deviceType;
+                    if (auto perTypeState = settings->getXmlValue(perTypeKey))
+                        savedAudioState = std::move(perTypeState);
+                }
             }
         }
+
+        audioInitError = deviceManager.initialise(256, 256, savedAudioState.get(), false);
     }
 
-    String audioInitError = deviceManager.initialise(256, 256, savedAudioState.get(), false);
     if (audioInitError.isNotEmpty())
         lastDeviceError = audioInitError;
-    // Note: when savedAudioState is null (first launch), initialise() falls back
-    // to initialiseDefault() automatically — that path is fine.  Only when a
-    // previously-saved device is unavailable do we stay silent (no fallback).
+
+    graph.setNonRealtime (hostOptions.debugMode);
     player.setProcessor(&graph);
     deviceManager.addAudioCallback(&player);
 
@@ -575,13 +611,17 @@ INDEX_PRESET_LOAD_FILE(7000000)
     knownPluginList.addChangeListener(this);
 
     // PluginChain: unified plugin chain management
-    pluginChain = std::make_unique<PluginChain>(graph, formatManager, player);
+    pluginChain = std::make_unique<PluginChain>(graph, formatManager, player,
+                                                 hostOptions.debugMode);
     presetManager = std::make_unique<PresetManager>(*pluginChain, getAppProperties());
 
-    // Load chain from app properties (new format) or from old format
-    pluginChain->loadFromProperties(getAppProperties());
+    // A direct CLI plug-in request is treated as an isolated harness unless
+    // --append is specified. This keeps reverse-engineering runs deterministic.
+    const bool restorePersistedChain = hostOptions.plugins.empty() || hostOptions.appendPlugins;
+    if (restorePersistedChain)
+        pluginChain->loadFromProperties(getAppProperties());
 
-    if (pluginChain->size() == 0)
+    if (restorePersistedChain && pluginChain->size() == 0)
     {
         // Old format migration — use a local KnownPluginList instead of
         // a member variable, since this migration runs only once per fresh start.
@@ -641,6 +681,8 @@ INDEX_PRESET_LOAD_FILE(7000000)
             defaultFile.getFullPathName());
         getAppProperties().saveIfNeeded();
     }
+
+    applyStartupOptions();
 };
 
 IconMenu::~IconMenu()
@@ -755,6 +797,14 @@ void IconMenu::timerCallback()
             }
         }
         menu.addItem(2, "Add plugins...");
+
+        if (hostOptions.debugMode)
+        {
+            menu.addSeparator();
+            menu.addSectionHeader("Debug (offline)");
+            menu.addItem(INDEX_DEBUG_PROCESS_ONE, "Process 1 silent block");
+            menu.addItem(INDEX_DEBUG_PROCESS_HUNDRED, "Process 100 silent blocks");
+        }
 
         // Total latency display
 
@@ -943,6 +993,18 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
         }
         return;
     }
+    // Debug/offline processing
+    if (id == im->INDEX_DEBUG_PROCESS_ONE)
+    {
+        im->processDebugBlocks (1);
+        return;
+    }
+    if (id == im->INDEX_DEBUG_PROCESS_HUNDRED)
+    {
+        im->processDebugBlocks (100);
+        return;
+    }
+
     // Plugins
     if (id > 2)
     {
@@ -1015,6 +1077,193 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
             im->presetManager->markDirty();
             PluginWindow::updateAllTitlesAndToolbars(im);
         }
+    }
+}
+
+bool IconMenu::loadPluginRequest (const PluginLaunchRequest& request, String& errorMessage)
+{
+    File pluginFile (request.path);
+
+    if (!pluginFile.exists())
+    {
+        errorMessage = "Plugin path does not exist: " + request.path;
+        return false;
+    }
+
+    const String identifier = pluginFile.getFullPathName();
+    std::vector<PluginDescription> candidates;
+
+    for (int i = 0; i < formatManager.getNumFormats(); ++i)
+    {
+        auto* format = formatManager.getFormat (i);
+        if (format == nullptr)
+            continue;
+
+        OwnedArray<PluginDescription> found;
+        format->findAllTypesForFile (found, identifier);
+
+        for (auto* desc : found)
+            if (desc != nullptr)
+                candidates.push_back (*desc);
+    }
+
+    if (candidates.empty())
+    {
+        errorMessage = "No supported plugin was found at: " + identifier;
+        return false;
+    }
+
+    const PluginDescription* selected = nullptr;
+
+    if (request.name.isNotEmpty())
+    {
+        for (const auto& candidate : candidates)
+        {
+            if (candidate.name.equalsIgnoreCase (request.name))
+            {
+                selected = &candidate;
+                break;
+            }
+        }
+
+        if (selected == nullptr)
+        {
+            StringArray names;
+            for (const auto& candidate : candidates)
+                names.addIfNotAlreadyThere (candidate.name);
+
+            errorMessage = "Plugin name \"" + request.name + "\" was not found in " + identifier
+                         + ". Available types: " + names.joinIntoString (", ");
+            return false;
+        }
+    }
+    else if (candidates.size() == 1)
+    {
+        selected = &candidates.front();
+    }
+    else
+    {
+        StringArray names;
+        for (const auto& candidate : candidates)
+            names.addIfNotAlreadyThere (candidate.name);
+
+        errorMessage = "The plugin file contains multiple plugin types: "
+                     + names.joinIntoString (", ")
+                     + ". Select one with --plugin-name immediately after --plugin.";
+        return false;
+    }
+
+    knownPluginList.addType (*selected);
+    const int index = pluginChain->add (*selected);
+
+    if (index < 0 || index >= pluginChain->size())
+    {
+        errorMessage = "Failed to add plugin to the chain: " + selected->name;
+        return false;
+    }
+
+    auto& slot = (*pluginChain)[index];
+    if (slot.isFailed() || slot.node == nullptr)
+    {
+        errorMessage = slot.errorMessage.isNotEmpty()
+                     ? slot.errorMessage
+                     : "Plugin instance creation failed: " + selected->name;
+        pluginChain->remove (index);
+        return false;
+    }
+
+    if (hostOptions.openEditors)
+    {
+        auto safeThis = Component::SafePointer<IconMenu> (this);
+        MessageManager::callAsync ([safeThis, index] {
+            if (auto* self = safeThis.getComponent())
+                self->openPluginEditor (index);
+        });
+    }
+
+    return true;
+}
+
+void IconMenu::openPluginEditor (int index)
+{
+    if (index < 0 || index >= pluginChain->size())
+        return;
+
+    auto& slot = (*pluginChain)[index];
+    if (slot.isFailed() || slot.node == nullptr)
+        return;
+
+    if (PluginWindow* const window =
+            PluginWindow::getWindowFor (slot.node, PluginWindow::Normal, this))
+        window->forceToFront();
+}
+
+bool IconMenu::processDebugBlocks (int blockCount, String* errorMessage)
+{
+    if (!hostOptions.debugMode)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = "Manual block processing is only available in --debug mode.";
+        return false;
+    }
+
+    if (blockCount <= 0)
+        return true;
+
+    auto* device = deviceManager.getCurrentAudioDevice();
+    if (device == nullptr)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = "The synthetic debug audio device is not available.";
+        return false;
+    }
+
+    const int blockSize = jmax (1, device->getCurrentBufferSizeSamples());
+    const int channels = jmax (2, jmax (graph.getTotalNumInputChannels(),
+                                        graph.getTotalNumOutputChannels()));
+
+    debugAudioBuffer.setSize (channels, blockSize, false, false, true);
+
+    ScopedNoDenormals noDenormals;
+    for (int i = 0; i < blockCount; ++i)
+    {
+        debugAudioBuffer.clear();
+        debugMidiBuffer.clear();
+        graph.processBlock (debugAudioBuffer, debugMidiBuffer);
+    }
+
+    return true;
+}
+
+void IconMenu::applyStartupOptions()
+{
+    for (const auto& request : hostOptions.plugins)
+    {
+        String error;
+        if (!loadPluginRequest (request, error))
+        {
+            std::cerr << "Light Host: " << error << std::endl;
+            NativeMessageBox::showMessageBoxAsync (
+                MessageBoxIconType::WarningIcon, "Plugin Load Failed", error);
+        }
+    }
+
+    if (hostOptions.processBlocks > 0)
+    {
+        String error;
+        if (!processDebugBlocks (hostOptions.processBlocks, &error))
+        {
+            std::cerr << "Light Host: " << error << std::endl;
+            NativeMessageBox::showMessageBoxAsync (
+                MessageBoxIconType::WarningIcon, "Debug Processing Failed", error);
+        }
+    }
+
+    if (hostOptions.exitAfterProcess)
+    {
+        MessageManager::callAsync ([] {
+            JUCEApplicationBase::quit();
+        });
     }
 }
 
@@ -1170,6 +1419,17 @@ void IconMenu::markPresetDirty()
 
 void IconMenu::showAudioSettings()
 {
+    if (hostOptions.debugMode)
+    {
+        NativeMessageBox::showMessageBoxAsync (
+            MessageBoxIconType::InfoIcon,
+            "Debug Mode",
+            "Audio hardware is intentionally disabled in debug mode.\n\n"
+            "Use --sample-rate and --block-size when launching Light Host CLI "
+            "to configure the synthetic debug device.");
+        return;
+    }
+
     AudioSettingsComponent audioSettingsComp (deviceManager, player, *pluginChain,
                                               lastDeviceError);
 
