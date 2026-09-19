@@ -131,6 +131,30 @@ private:
         ParsedCommandLine parsed;
         const auto args = getCommandLineParameterArray();
 
+        auto isRecognizedOptionToken = [] (const String& token)
+        {
+            static const StringArray flagOptions {
+                "--debug", "--append", "--no-editor", "--exit-after-process",
+                "--help", "-h", "--version",
+                "--plugin", "--plugin-name", "--sample-rate", "--block-size",
+                "--process-blocks"
+            };
+
+            if (flagOptions.contains (token) || token.startsWith ("-multi-instance="))
+                return true;
+
+            static const StringArray valueOptions {
+                "--plugin=", "--plugin-name=", "--sample-rate=",
+                "--block-size=", "--process-blocks="
+            };
+
+            for (const auto& prefix : valueOptions)
+                if (token.startsWith (prefix))
+                    return true;
+
+            return false;
+        };
+
         auto takeValue = [&] (int& index, const String& option, String& value) -> bool
         {
             const auto& arg = args[index];
@@ -144,7 +168,12 @@ private:
 
             if (arg == option && index + 1 < args.size())
             {
-                value = args[++index];
+                const auto& candidate = args[index + 1];
+                if (isRecognizedOptionToken (candidate))
+                    return false;
+
+                value = candidate;
+                ++index;
                 return value.isNotEmpty();
             }
 
