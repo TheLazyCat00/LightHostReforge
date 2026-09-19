@@ -3,7 +3,7 @@
   "packages": [
     "cmake@4.1.2",
     "ninja@1.13.1",
-    "pkg-config@latest",
+    "pkg-config@0.29.2",
     "juce@8.0.12"
   ],
   "shell": {
