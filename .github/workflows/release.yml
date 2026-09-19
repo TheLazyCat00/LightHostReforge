@@ -48,11 +48,12 @@ jobs:
         run: |
           & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install juce:${{ matrix.triplet }} asiosdk:${{ matrix.triplet }}
 
-      - name: Install dependencies (macOS)
+      - name: Install Devbox (macOS)
         if: matrix.platform == 'macos'
-        shell: bash
-        run: |
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install juce:${{ matrix.triplet }}
+        uses: jetify-com/devbox-install-action@v0.15.0
+        with:
+          enable-cache: 'true'
+          devbox-version: '0.17.5'
 
       - name: Configure (Windows)
         if: matrix.platform == 'windows'
@@ -65,14 +66,16 @@ jobs:
       - name: Configure (macOS)
         if: matrix.platform == 'macos'
         shell: bash
-        run: |
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake" \
-            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+        run: devbox run configure
 
-      - name: Build
+      - name: Build (Windows)
+        if: matrix.platform == 'windows'
         run: cmake --build build --config Release --parallel
+
+      - name: Build (macOS)
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: devbox run build
 
       - name: Package Windows build
         if: matrix.platform == 'windows'
@@ -80,7 +83,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist/package | Out-Null
           Copy-Item "build/LightHost_artefacts/Release/Light Host.exe" "dist/package/"
-          Copy-Item "build/LightHostCLI_artefacts/Release/Light Host CLI.exe" "dist/package/"
+          Copy-Item "build/LightHostCLI_artefacts/Release/lhc.exe" "dist/package/"
 
           $pdbs = @(Get-ChildItem "build/LightHostCLI_artefacts/Release" -Filter "*.pdb")
           if ($pdbs.Count -eq 0) {
@@ -98,9 +101,9 @@ jobs:
         run: |
           mkdir -p dist/package
           cp -R "build/LightHost_artefacts/Release/Light Host.app" "dist/package/"
-          cp "build/LightHostCLI_artefacts/Release/Light Host CLI" "dist/package/"
+          cp "build/LightHostCLI_artefacts/Release/lhc" "dist/package/"
 
-          DSYM="build/LightHostCLI_artefacts/Release/Light Host CLI.dSYM"
+          DSYM="build/LightHostCLI_artefacts/Release/lhc.dSYM"
           if [ ! -d "$DSYM" ]; then
             echo "LightHostCLI dSYM was not generated" >&2
             exit 1
