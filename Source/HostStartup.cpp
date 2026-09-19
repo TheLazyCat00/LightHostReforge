@@ -169,7 +169,7 @@ private:
             if (arg == option && index + 1 < args.size())
             {
                 const auto& candidate = args[index + 1];
-                if (isRecognizedOptionToken (candidate))
+                if (candidate.startsWith ("--") || isRecognizedOptionToken (candidate))
                     return false;
 
                 value = candidate;
