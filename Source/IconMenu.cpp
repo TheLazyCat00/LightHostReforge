@@ -682,7 +682,15 @@ IconMenu::IconMenu (const HostOptions& options)
         getAppProperties().saveIfNeeded();
     }
 
-    applyStartupOptions();
+    // Instantiate command-line plugins only after JUCE has entered its normal
+    // message loop. Some plugins display modal UI during construction, and
+    // loading them synchronously from JUCEApplication::initialise() can confuse
+    // the macOS event loop (the JUCE AudioPluginHost uses the same deferral).
+    auto startupSafeThis = Component::SafePointer<IconMenu> (this);
+    MessageManager::callAsync ([startupSafeThis] {
+        if (auto* self = startupSafeThis.getComponent())
+            self->applyStartupOptions();
+    });
 };
 
 IconMenu::~IconMenu()
