@@ -70,6 +70,7 @@ private:
     void applyStartupOptions();
 
     HostOptions hostOptions;
+    bool chainPersistenceEnabled = true;
     AudioDeviceManager deviceManager;
     AudioPluginFormatManager formatManager;
     KnownPluginList knownPluginList;
