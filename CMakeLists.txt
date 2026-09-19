@@ -181,6 +181,15 @@ if(LIGHTHOST_BUILD_CLI)
 
     if(LIGHTHOST_CLI_KEEP_SYMBOLS)
         make_reverse_engineering_friendly(LightHostCLI)
+
+        if(APPLE)
+            add_custom_command(TARGET LightHostCLI POST_BUILD
+                COMMAND dsymutil "$<TARGET_FILE:LightHostCLI>"
+                        -o "$<TARGET_FILE:LightHostCLI>.dSYM"
+                COMMENT "Generating full dSYM for LightHostCLI"
+                VERBATIM
+            )
+        endif()
     else()
         target_link_libraries(LightHostCLI PUBLIC juce::juce_recommended_lto_flags)
     endif()
