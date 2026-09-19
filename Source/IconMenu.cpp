@@ -1242,7 +1242,7 @@ void IconMenu::applyStartupOptions()
         String error;
         if (!loadPluginRequest (request, error))
         {
-            std::cerr << "Light Host: " << error << std::endl;
+            std::cerr << "Light Host: " << error.toStdString() << std::endl;
             NativeMessageBox::showMessageBoxAsync (
                 MessageBoxIconType::WarningIcon, "Plugin Load Failed", error);
         }
@@ -1253,7 +1253,7 @@ void IconMenu::applyStartupOptions()
         String error;
         if (!processDebugBlocks (hostOptions.processBlocks, &error))
         {
-            std::cerr << "Light Host: " << error << std::endl;
+            std::cerr << "Light Host: " << error.toStdString() << std::endl;
             NativeMessageBox::showMessageBoxAsync (
                 MessageBoxIconType::WarningIcon, "Debug Processing Failed", error);
         }
