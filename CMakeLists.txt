@@ -180,7 +180,7 @@ if(LIGHTHOST_BUILD_CLI)
         VERSION "1.2.0"
     )
     configure_light_host_target(LightHostCLI)
-    set_target_properties(LightHostCLI PROPERTIES OUTPUT_NAME "Light Host CLI")
+    set_target_properties(LightHostCLI PROPERTIES OUTPUT_NAME "lhc")
     target_compile_definitions(LightHostCLI PRIVATE LIGHTHOST_CLI_BUILD=1)
 
     if(LIGHTHOST_CLI_KEEP_SYMBOLS)
