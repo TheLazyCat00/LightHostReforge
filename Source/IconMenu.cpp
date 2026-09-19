@@ -617,11 +617,11 @@ IconMenu::IconMenu (const HostOptions& options)
 
     // A direct CLI plug-in request is treated as an isolated harness unless
     // --append is specified. This keeps reverse-engineering runs deterministic.
-    const bool restorePersistedChain = hostOptions.plugins.empty() || hostOptions.appendPlugins;
-    if (restorePersistedChain)
+    chainPersistenceEnabled = hostOptions.plugins.empty() || hostOptions.appendPlugins;
+    if (chainPersistenceEnabled)
         pluginChain->loadFromProperties(getAppProperties());
 
-    if (restorePersistedChain && pluginChain->size() == 0)
+    if (chainPersistenceEnabled && pluginChain->size() == 0)
     {
         // Old format migration — use a local KnownPluginList instead of
         // a member variable, since this migration runs only once per fresh start.
@@ -698,8 +698,9 @@ IconMenu::~IconMenu()
     pluginChain->fadeOut();
     player.suspend(deviceManager);
 
-    // Save chain state before closing
-    if (pluginChain != nullptr)
+    // Save chain state before closing. Isolated CLI runs intentionally never
+    // replace the user's persisted chain.
+    if (pluginChain != nullptr && chainPersistenceEnabled)
         pluginChain->saveToProperties(getAppProperties());
 
     PluginWindow::closeAllCurrentlyOpenWindows();
@@ -907,7 +908,8 @@ void IconMenu::menuInvocationCallback(int id, IconMenu* im)
                 im->setIconImage(clearImg, clearImg);
             }
 
-            im->pluginChain->saveToProperties(getAppProperties());
+            if (im->chainPersistenceEnabled)
+                im->pluginChain->saveToProperties(getAppProperties());
             return JUCEApplication::getInstance()->quit();
         }
         if (id == 2)
@@ -1245,14 +1247,19 @@ bool IconMenu::processDebugBlocks (int blockCount, String* errorMessage)
 
 void IconMenu::applyStartupOptions()
 {
+    bool startupFailed = false;
+
     for (const auto& request : hostOptions.plugins)
     {
         String error;
         if (!loadPluginRequest (request, error))
         {
+            startupFailed = true;
             std::cerr << "Light Host: " << error.toStdString() << std::endl;
-            NativeMessageBox::showMessageBoxAsync (
-                MessageBoxIconType::WarningIcon, "Plugin Load Failed", error);
+
+            if (!hostOptions.exitAfterProcess)
+                NativeMessageBox::showMessageBoxAsync (
+                    MessageBoxIconType::WarningIcon, "Plugin Load Failed", error);
         }
     }
 
@@ -1261,15 +1268,21 @@ void IconMenu::applyStartupOptions()
         String error;
         if (!processDebugBlocks (hostOptions.processBlocks, &error))
         {
+            startupFailed = true;
             std::cerr << "Light Host: " << error.toStdString() << std::endl;
-            NativeMessageBox::showMessageBoxAsync (
-                MessageBoxIconType::WarningIcon, "Debug Processing Failed", error);
+
+            if (!hostOptions.exitAfterProcess)
+                NativeMessageBox::showMessageBoxAsync (
+                    MessageBoxIconType::WarningIcon, "Debug Processing Failed", error);
         }
     }
 
     if (hostOptions.exitAfterProcess)
     {
-        MessageManager::callAsync ([] {
+        MessageManager::callAsync ([startupFailed] {
+            if (auto* app = JUCEApplicationBase::getInstance())
+                app->setApplicationReturnValue (startupFailed ? 1 : 0);
+
             JUCEApplicationBase::quit();
         });
     }
