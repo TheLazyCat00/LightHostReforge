@@ -58,10 +58,13 @@ devbox run configure
 devbox run build
 ```
 
-Devbox pins CMake, Ninja, pkg-config, and JUCE for reproducible local and macOS
-CI builds. Native Windows CI remains on MSVC + vcpkg because Devbox itself runs
-on Linux/macOS/WSL rather than as a native Windows build environment, and the
-Windows host needs the native ASIO/MSVC toolchain.
+Devbox pins CMake, Ninja, pkg-config, and JUCE for reproducible local development
+and Apple Silicon macOS CI builds. Native Windows CI remains on MSVC + vcpkg
+because Devbox is not a native Windows build environment and the Windows host
+needs the native ASIO/MSVC toolchain. The macOS Intel CI job also remains on
+vcpkg because current Devbox/Nix upstream support for x86_64-darwin is broken.
+The source supports both the JUCE 8.0.7 API used by vcpkg and JUCE 8.0.9+
+used by the Devbox environment.
 
 ### Debug / CLI host
 
