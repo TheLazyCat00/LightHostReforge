@@ -144,7 +144,8 @@ function(make_reverse_engineering_friendly target)
         target_link_options(${target} PRIVATE /DEBUG:FULL /OPT:NOREF /OPT:NOICF)
     elseif(APPLE)
         target_compile_options(${target} PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline)
-        target_link_options(${target} PRIVATE -Wl,-no_dead_strip)
+        # Apple's linker does not dead-strip by default. Do not pass -dead_strip,
+        # and avoid the unsupported inverse flag -no_dead_strip.
     else()
         target_compile_options(${target} PRIVATE -O0 -g3 -fno-omit-frame-pointer -fno-inline)
         target_link_options(${target} PRIVATE -Wl,--no-gc-sections -Wl,--export-dynamic)
@@ -179,6 +180,7 @@ if(LIGHTHOST_BUILD_CLI)
         VERSION "1.2.0"
     )
     configure_light_host_target(LightHostCLI)
+    set_target_properties(LightHostCLI PROPERTIES OUTPUT_NAME "Light Host CLI")
     target_compile_definitions(LightHostCLI PRIVATE LIGHTHOST_CLI_BUILD=1)
 
     if(LIGHTHOST_CLI_KEEP_SYMBOLS)
